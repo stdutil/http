@@ -102,6 +102,14 @@ func ExecuteJsonApi(method string, endPoint string, payload []byte, compressed b
 
 	// Assign temp to result
 	rd.Data = trd.Data
+	rd.FocusControl = trd.FocusControl
+	rd.Operation = trd.Operation
+	rd.Page = trd.Page
+	rd.PageCount = trd.PageCount
+	rd.PageSize = trd.PageCount
+	rd.Tag = trd.Tag
+	rd.TaskID = trd.TaskID
+	rd.WorkerID = trd.WorkerID
 	rd.Return(rslt.Status(trd.Status))
 	for _, m := range trd.Messages {
 		if m == "" {
@@ -148,7 +156,7 @@ func ExecuteApi(method string, endPoint string, payload []byte, compressed bool,
 	nr.Close = true
 	nr.Header.Set(
 		"User-Agent",
-		fmt.Sprintf("com.github.eaglebush.stdutil.request/%s-%s",
+		fmt.Sprintf("com.github.stdutil.http/%s-%s",
 			REQUEST_VERSION, REQUEST_MODIFIED))
 	nr.Header.Set("Connection", "keep-alive")
 	nr.Header.Set("Accept", "*/*")
@@ -194,34 +202,32 @@ func ExecuteApi(method string, endPoint string, payload []byte, compressed bool,
 	}
 	var data []byte
 
-	if !resp.Uncompressed {
-		ce := resp.Header.Get("Content-Encoding")
-		if ce == "gzip" {
-			raw, err := io.ReadAll(resp.Body)
-			if err != nil {
-				return nil, err
-			}
-			gzr, err := gzip.NewReader(bytes.NewBuffer(raw))
-			if err != nil {
-				return nil, err
-			}
-			defer gzr.Close()
-			for {
-				uz := make([]byte, 1024)
-				cnt, err := gzr.Read(uz)
-				if err != nil {
-					if !errors.Is(err, io.ErrUnexpectedEOF) {
-						return nil, err
-					}
-					break
-				}
-				if cnt == 0 {
-					break
-				}
-				data = append(data, uz[0:cnt]...)
-			}
-			return data, nil
+	ce := strings.ToLower(resp.Header.Get("Content-Encoding"))
+	if !resp.Uncompressed && ce == "gzip" {
+		raw, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return nil, err
 		}
+		gzr, err := gzip.NewReader(bytes.NewBuffer(raw))
+		if err != nil {
+			return nil, err
+		}
+		defer gzr.Close()
+		for {
+			uz := make([]byte, 1024)
+			cnt, err := gzr.Read(uz)
+			if err != nil {
+				if !errors.Is(err, io.ErrUnexpectedEOF) {
+					return nil, err
+				}
+				break
+			}
+			if cnt == 0 {
+				break
+			}
+			data = append(data, uz[0:cnt]...)
+		}
+		return data, nil
 	}
 
 	data, err = io.ReadAll(resp.Body)
