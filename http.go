@@ -136,7 +136,7 @@ func ExecuteJsonApi(method string, endPoint string, payload []byte, compressed b
 		case string(log.Success):
 			rd.Result.AddSuccess(msg)
 		case string(log.App):
-			rd.Result.AddAppMsg(msg)
+			rd.Result.AddRawMsg(msg)
 		}
 	}
 
