@@ -320,7 +320,7 @@ func ParseRouteVars(r *http.Request, preserveCmdCase bool) (Command []string, Ke
 				if !preserveCmdCase {
 					ck = strings.ToLower(ck)
 				}
-				cmd = append(cmd, strings.ToLower(ck))
+				cmd = append(cmd, ck)
 			}
 		}
 		if pth := path[pathlen-1]; len(pth) > 0 {
