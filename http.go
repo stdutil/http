@@ -277,7 +277,7 @@ func ParseQueryString(qs *string) nv.NameValues {
 }
 
 // ParseRouteVars parses custom routes from a mux handler
-func ParseRouteVars(r *http.Request) (Command []string, Key string) {
+func ParseRouteVars(r *http.Request, preserveCmdCase bool) (Command []string, Key string) {
 	cmd := make([]string, 0, 10)
 	key := ""
 	m := mux.CurrentRoute(r)
@@ -291,17 +291,24 @@ func ParseRouteVars(r *http.Request) (Command []string, Key string) {
 		return c == '/'
 	})
 	pathlen := len(path)
+	if pathlen == 0 {
+		return cmd, key
+	}
 
 	// If path length is 1, we might have a key.
 	// But if the path is not a number, it might be a command
 	if pathlen == 1 {
 		if pth := path[0]; len(pth) > 0 {
+			if !preserveCmdCase {
+				pth = strings.ToLower(pth)
+			}
 			if hasTrailingSlash {
-				cmd = append(cmd, strings.ToLower(pth))
+				cmd = append(cmd, pth)
 			} else {
 				key = pth
 			}
 		}
+		return cmd, key
 	}
 
 	// If path length is greater than 1, we transfer all paths
@@ -310,12 +317,18 @@ func ParseRouteVars(r *http.Request) (Command []string, Key string) {
 	if pathlen > 1 {
 		for i, ck := range path {
 			if i < pathlen-1 && len(ck) > 0 {
+				if !preserveCmdCase {
+					ck = strings.ToLower(ck)
+				}
 				cmd = append(cmd, strings.ToLower(ck))
 			}
 		}
 		if pth := path[pathlen-1]; len(pth) > 0 {
+			if !preserveCmdCase {
+				pth = strings.ToLower(pth)
+			}
 			if hasTrailingSlash {
-				cmd = append(cmd, strings.ToLower(pth))
+				cmd = append(cmd, pth)
 			} else {
 				key = pth
 			}
@@ -422,7 +435,7 @@ func SignJwt(claims *map[string]interface{}, secretKey string) string {
 }
 
 // GetRequestVarsOnly get request variables
-func GetRequestVarsOnly(r *http.Request) RequestVars {
+func GetRequestVarsOnly(r *http.Request, preserveCmdCase bool) RequestVars {
 	var (
 		c1 string
 	)
@@ -468,7 +481,7 @@ func GetRequestVarsOnly(r *http.Request) RequestVars {
 	}
 	rv.Variables.HasFormData = len(rv.Variables.FormData.Pair) > 0
 	// Get route commands
-	rv.Variables.Command, rv.Variables.Key = ParseRouteVars(r)
+	rv.Variables.Command, rv.Variables.Key = ParseRouteVars(r, preserveCmdCase)
 	return *rv
 }
 
@@ -538,8 +551,8 @@ func ParseJwt(token, secretKey string, validateTimes bool) (*JWTInfo, error) {
 }
 
 // GetRequestVars requests variables and return JWT validation result
-func GetRequestVars(r *http.Request, secretKey string, validateTimes bool) (RequestVars, error) {
-	rv := GetRequestVarsOnly(r)
+func GetRequestVars(r *http.Request, secretKey string, validateTimes, preserveCmdCase bool) (RequestVars, error) {
+	rv := GetRequestVarsOnly(r, preserveCmdCase)
 	rv.Token = nil
 	// silently ignore OPTION methid
 	if strings.EqualFold(r.Method, "OPTION") {
