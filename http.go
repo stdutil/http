@@ -277,7 +277,7 @@ func ParseQueryString(qs *string) nv.NameValues {
 }
 
 // ParseRouteVars parses custom routes from a mux handler
-func ParseRouteVars(r *http.Request, preserveCmdCase bool) (Command []string, Key string) {
+func ParseRouteVars(r *http.Request, preserveCmdCase bool) ([]string, string) {
 	cmd := make([]string, 0, 10)
 	key := ""
 	m := mux.CurrentRoute(r)
@@ -299,10 +299,10 @@ func ParseRouteVars(r *http.Request, preserveCmdCase bool) (Command []string, Ke
 	// But if the path is not a number, it might be a command
 	if pathlen == 1 {
 		if pth := path[0]; len(pth) > 0 {
-			if !preserveCmdCase {
-				pth = strings.ToLower(pth)
-			}
 			if hasTrailingSlash {
+				if !preserveCmdCase {
+					pth = strings.ToLower(pth)
+				}
 				cmd = append(cmd, pth)
 			} else {
 				key = pth
@@ -324,10 +324,10 @@ func ParseRouteVars(r *http.Request, preserveCmdCase bool) (Command []string, Ke
 			}
 		}
 		if pth := path[pathlen-1]; len(pth) > 0 {
-			if !preserveCmdCase {
-				pth = strings.ToLower(pth)
-			}
 			if hasTrailingSlash {
+				if !preserveCmdCase {
+					pth = strings.ToLower(pth)
+				}
 				cmd = append(cmd, pth)
 			} else {
 				key = pth
