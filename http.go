@@ -278,64 +278,93 @@ func ParseQueryString(qs *string) nv.NameValues {
 
 // ParseRouteVars parses custom routes from a mux handler
 func ParseRouteVars(r *http.Request, preserveCmdCase bool) ([]string, string) {
-	cmd := make([]string, 0, 10)
-	key := ""
 	m := mux.CurrentRoute(r)
 	pt, _ := m.GetPathTemplate()
 	ptn := strings.Replace(r.URL.Path, pt, "", -1) // Trim the url by URL path. The remaining text will be the path to evaluate
-	hasTrailingSlash := false
+	return ParsePath(ptn, !preserveCmdCase, false)
+}
+
+// ParsePath parses a url path and returns an array of path
+//
+//   - normalizePathCase is an option to make all path lower case for ease of comparison. Defaults to true.
+//   - inclSlashPfx is an option to include slash prefix in the results, Defaults to false.
+func ParsePath(urlPath string, normalizePathCase, inclSlashPfx bool) ([]string, string) {
+
+	var (
+		ptn,
+		id,
+		slashPfx string
+		paths            []string
+		hasTrailingSlash bool
+	)
+
+	if urlPath == "" {
+		return paths, id
+	}
+
+	urlPath = strings.ReplaceAll(urlPath, `\`, `/`)
+	if urlPath == "/" {
+		paths = append(paths, "/")
+		return paths, id
+	}
+
+	ptn = urlPath
 	if ptn != "" {
 		hasTrailingSlash = ptn[len(ptn)-1:] == `/`
 	}
-	path := strings.FieldsFunc(ptn, func(c rune) bool {
+
+	if inclSlashPfx {
+		slashPfx = "/"
+	}
+
+	rawPath := strings.FieldsFunc(ptn, func(c rune) bool {
 		return c == '/'
 	})
-	pathlen := len(path)
+	pathlen := len(rawPath)
 	if pathlen == 0 {
-		return cmd, key
+		return paths, id
 	}
 
 	// If path length is 1, we might have a key.
 	// But if the path is not a number, it might be a command
 	if pathlen == 1 {
-		if pth := path[0]; len(pth) > 0 {
+		if pth := rawPath[0]; len(pth) > 0 {
 			if hasTrailingSlash {
-				if !preserveCmdCase {
+				if normalizePathCase {
 					pth = strings.ToLower(pth)
 				}
-				cmd = append(cmd, pth)
+				paths = append(paths, slashPfx+pth)
 			} else {
-				key = pth
+				id = pth
 			}
 		}
-		return cmd, key
+		return paths, id
 	}
 
 	// If path length is greater than 1, we transfer all paths
 	// to the cmd array except the last one. The last one will
 	// be checked if it has a trailing slash
 	if pathlen > 1 {
-		for i, ck := range path {
+		for i, ck := range rawPath {
 			if i < pathlen-1 && len(ck) > 0 {
-				if !preserveCmdCase {
+				if normalizePathCase {
 					ck = strings.ToLower(ck)
 				}
-				cmd = append(cmd, ck)
+				paths = append(paths, slashPfx+ck)
 			}
 		}
-		if pth := path[pathlen-1]; len(pth) > 0 {
+		if pth := rawPath[pathlen-1]; len(pth) > 0 {
 			if hasTrailingSlash {
-				if !preserveCmdCase {
+				if normalizePathCase {
 					pth = strings.ToLower(pth)
 				}
-				cmd = append(cmd, pth)
+				paths = append(paths, slashPfx+pth)
 			} else {
-				key = pth
+				id = pth
 			}
 		}
 	}
-
-	return cmd, key
+	return paths, id
 }
 
 // SignJwt builds a JWT token using HMAC256 algorithm
