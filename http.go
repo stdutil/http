@@ -149,7 +149,7 @@ func ExecuteJsonApi(method string, endPoint string, payload []byte, compressed b
 // ExecuteApi wraps http operation that change or read data and returns a byte array
 //
 // On headers:
-//   - Content-Type: If this header is not set, it defaults to "application/json"//
+//   - Content-Type: If this header is not set, it defaults to "application/json"
 //   - Content-Encoding: If compressed is true, it is set to "gzip"
 func ExecuteApi(method string, endPoint string, payload []byte, compressed bool, header map[string]string, timeOut int) ([]byte, error) {
 	nr, err := http.NewRequest(method, endPoint, bytes.NewBuffer(payload))
@@ -812,6 +812,45 @@ func StoreUpload(r *http.Request, formName string) (TempFileName, UploadFileName
 	TempFileName = tempFile.Name()
 
 	return TempFileName, UploadFileName, UploadFileExt, UploadFileSize, nil
+}
+
+// CreateUpload creates an uploadable data for http upload
+//
+// The function returns the following:
+//   - *bytes.Buffer: The buffer data. To get bytes, it call the Bytes() function
+//   - string: content type of the file
+//   - error
+func CreateUpload(fileName, formName string) (*bytes.Buffer, string, error) {
+	var (
+		err         error
+		payload     *bytes.Buffer
+		file        *os.File
+		ioW         io.Writer
+		contentType string
+	)
+
+	payload = &bytes.Buffer{}
+	writer := multipart.NewWriter(payload)
+	file, err = os.Open(fileName)
+	if err != nil {
+		return payload, contentType, err
+	}
+	defer file.Close()
+
+	ioW, err = writer.CreateFormFile(formName, filepath.Base(fileName))
+	if err != nil {
+		return payload, contentType, err
+	}
+	_, err = io.Copy(ioW, file)
+	if err != nil {
+		return payload, contentType, err
+	}
+	err = writer.Close()
+	if err != nil {
+		return payload, contentType, err
+	}
+	contentType = writer.FormDataContentType()
+	return payload, contentType, err
 }
 
 func safeMapWrite[T any](ptrMap *map[string]T, key string, value T, rw *sync.RWMutex) bool {
