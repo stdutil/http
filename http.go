@@ -74,34 +74,43 @@ func SetRequestTimeout(timeOut int) {
 }
 
 // ExecuteJsonApi wraps http operation that change or read data and returns a custom result
-func ExecuteJsonApi(method string, endPoint string, payload []byte, compressed bool, header map[string]string, timeOut int, rw *sync.RWMutex) (rd ResultData) {
+func ExecuteJsonApi(method string, endPoint string, payload []byte, opts ...RequestOption) (rd ResultData) {
+	var (
+		rw *sync.RWMutex
+	)
 	rd = ResultData{
 		Result: rslt.InitResult(),
-	}
-	if header == nil {
-		header = make(map[string]string)
 	}
 	if rw == nil {
 		rw = &sync.RWMutex{}
 	}
-	safeMapWrite(&header, "Content-Type", "application/json", rw)
-	data, err := ExecuteApi(method, endPoint, payload, compressed, header, timeOut)
+	// Override header option
+	rp := RequestParam{}
+	safeMapWrite(&rp.Headers, "Content-Type", "application/json", rw)
+	for _, o := range opts {
+		if o == nil {
+			continue
+		}
+		o(&rp)
+	}
+
+	trd, err := ExecuteApi[ResultData](method, endPoint, payload, opts...)
 	if err != nil {
 		rd.Result.AddErr(err)
 		return
 	}
-	if len(data) == 0 {
-		return
-	}
+	// if len(data) == 0 {
+	// 	return
+	// }
 
-	// Create a temporary result data for unmarshalling purposes
-	// The internal Log field is not populated when unmarshalling
-	trd := ResultData{}
-	if err = json.Unmarshal(data, &trd); err != nil {
-		rd.Result.AddErr(err)
-		rd.Data = data // This is not marshable to resultdata, we'll try to send the real result
-		return
-	}
+	// // Create a temporary result data for unmarshalling purposes
+	// // The internal Log field is not populated when unmarshalling
+	// trd := ResultData{}
+	// if err = json.Unmarshal(data, &trd); err != nil {
+	// 	rd.Result.AddErr(err)
+	// 	rd.Data = data // This is not marshable to resultdata, we'll try to send the real result
+	// 	return
+	// }
 
 	// Assign temp to result
 	rd.Data = trd.Data
@@ -151,29 +160,38 @@ func ExecuteJsonApi(method string, endPoint string, payload []byte, compressed b
 // On headers:
 //   - Content-Type: If this header is not set, it defaults to "application/json"
 //   - Content-Encoding: If compressed is true, it is set to "gzip"
-func ExecuteApi(method string, endPoint string, payload []byte, compressed bool, header map[string]string, timeOut int) ([]byte, error) {
+func ExecuteApi[T any](method string, endPoint string, payload []byte, opts ...RequestOption) (T, error) {
+	var x T
+
+	rp := RequestParam{
+		Compressed: false,
+	}
+	for _, o := range opts {
+		if o == nil {
+			continue
+		}
+		o(&rp)
+	}
+
 	nr, err := http.NewRequest(method, endPoint, bytes.NewBuffer(payload))
 	if err != nil {
-		return nil, err
+		return x, err
 	}
 	nr.Close = true
-	nr.Header.Set(
-		"User-Agent",
-		fmt.Sprintf("com.github.stdutil.http/%s-%s",
-			REQUEST_VERSION, REQUEST_MODIFIED))
+	nr.Header.Set("User-Agent", fmt.Sprintf("com.github.stdutil.http/%s-%s", REQUEST_VERSION, REQUEST_MODIFIED))
 	nr.Header.Set("Connection", "keep-alive")
 	nr.Header.Set("Accept", "*/*")
 	if ct := nr.Header.Get("Content-Type"); ct == "" {
 		nr.Header.Set("Content-Type", "application/json")
 	}
-	if compressed {
+	if rp.Compressed {
 		nr.Header.Set("Accept-Encoding", "gzip, deflate, br")
 		switch strings.ToUpper(nr.Method) {
 		case "POST", "PUT", "PATCH":
 			nr.Header.Add("Content-Encoding", "gzip")
 		}
 	}
-	for k, v := range header {
+	for k, v := range rp.Headers {
 		k = strings.ToLower(k)
 		if k != "cookie" {
 			nr.Header.Set(k, v)
@@ -188,32 +206,35 @@ func ExecuteApi(method string, endPoint string, payload []byte, compressed bool,
 			}
 		}
 	}
-	if timeOut == 0 {
-		timeOut = 30
+	if rp.TimeOut == 0 {
+		rp.TimeOut = 30
 	}
 	cli := http.Client{
-		Timeout:   time.Second * time.Duration(timeOut),
+		Timeout:   time.Second * time.Duration(rp.TimeOut),
 		Transport: ct,
 	}
 	resp, err := cli.Do(nr)
 	if err != nil {
-		return nil, err
+		return x, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf(resp.Status)
+		return x, fmt.Errorf(resp.Status)
 	}
-	var data []byte
+	var (
+		data []byte
+		xa   any
+	)
 
 	ce := strings.ToLower(resp.Header.Get("Content-Encoding"))
 	if !resp.Uncompressed && ce == "gzip" {
 		raw, err := io.ReadAll(resp.Body)
 		if err != nil {
-			return nil, err
+			return x, err
 		}
 		gzr, err := gzip.NewReader(bytes.NewBuffer(raw))
 		if err != nil {
-			return nil, err
+			return x, err
 		}
 		defer gzr.Close()
 		for {
@@ -221,7 +242,7 @@ func ExecuteApi(method string, endPoint string, payload []byte, compressed bool,
 			cnt, err := gzr.Read(uz)
 			if err != nil {
 				if !errors.Is(err, io.ErrUnexpectedEOF) {
-					return nil, err
+					return x, err
 				}
 				break
 			}
@@ -230,16 +251,21 @@ func ExecuteApi(method string, endPoint string, payload []byte, compressed bool,
 			}
 			data = append(data, uz[0:cnt]...)
 		}
-		return data, nil
+		// Except for []bytes, unmarshall
+		vo := reflect.TypeOf(T)
+		err = json.Unmarshal(data, &x)
+		return x, nil
 	}
 
 	data, err = io.ReadAll(resp.Body)
 	if err != nil {
 		if !errors.Is(err, io.ErrUnexpectedEOF) {
-			return nil, err
+			return x, err
 		}
 	}
-	return data, nil
+
+	xa = data
+	return xa.(T), nil
 }
 
 // GetJson wraps http.Get and gets a raw json message data
