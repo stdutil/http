@@ -7,8 +7,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"sync"
@@ -740,6 +743,75 @@ func PatchApi[T any, U any](url string, pl U, opts ...RequestOption) rslt.Result
 	}
 	rd := ExecuteJsonApi("PATCH", url, b, rp.Compressed, rp.Headers, rp.TimeOut, rp.Mutex)
 	return getJsonConverted[T](&rd)
+}
+
+// StoreUpload stores the form file upload into a temporary file returning the following values:
+//
+//   - TempFileName - temporary file name
+//   - UploadFileName - original file name to upload
+//   - UploadFileExt - original file name extension
+//   - UploadFileSize - file size of the upload
+//   - err - error information
+func StoreUpload(r *http.Request, formName string) (TempFileName, UploadFileName, UploadFileExt string, UploadFileSize int64, err error) {
+	var (
+		ff       multipart.File
+		fh       *multipart.FileHeader
+		tempFile *os.File
+	)
+
+	if formName == "" {
+		formName = "file"
+	}
+
+	ff, fh, err = r.FormFile(formName)
+	if err != nil {
+		return TempFileName, UploadFileName, UploadFileExt, UploadFileSize, err
+	}
+	defer ff.Close()
+
+	if fh == nil {
+		err = fmt.Errorf("no file was detected")
+		return TempFileName, UploadFileName, UploadFileExt, UploadFileSize, err
+	}
+
+	fext := strings.ToLower(filepath.Ext(fh.Filename))
+	tempFile, err = os.CreateTemp(os.TempDir(), "*"+fext)
+	if err != nil {
+		return TempFileName, UploadFileName, UploadFileExt, UploadFileSize, err
+	}
+	defer tempFile.Close()
+
+	var (
+		n  int
+		nt int64
+	)
+	buff := make([]byte, 4096)
+	for {
+		n, err = ff.Read(buff)
+		if err != nil && err != io.EOF {
+			return TempFileName, UploadFileName, UploadFileExt, UploadFileSize, err
+		}
+		if n == 0 {
+			break
+		}
+		_, err = tempFile.WriteAt(buff[0:n], nt)
+		if err != nil {
+			return TempFileName, UploadFileName, UploadFileExt, UploadFileSize, err
+		}
+		nt += int64(n)
+	}
+	if nt == 0 {
+		err = fmt.Errorf("zero bytes read")
+		return TempFileName, UploadFileName, UploadFileExt, UploadFileSize, err
+	}
+
+	// Prepare valid result
+	UploadFileName = fh.Filename
+	UploadFileExt = strings.ToLower(filepath.Ext(UploadFileName))
+	UploadFileSize = fh.Size
+	TempFileName = tempFile.Name()
+
+	return TempFileName, UploadFileName, UploadFileExt, UploadFileSize, nil
 }
 
 func safeMapWrite[T any](ptrMap *map[string]T, key string, value T, rw *sync.RWMutex) bool {
