@@ -7,13 +7,13 @@ require (
 	github.com/gorilla/mux v1.8.1
 	github.com/stdutil/log v0.0.0-20241115150827-18730e91d3ec
 	github.com/stdutil/name-value v0.0.0-20250203071454-6cef1591014b
-	github.com/stdutil/result v0.0.0-20250405133328-e3fa4e33c91c
+	github.com/stdutil/result v0.0.0-20250508015725-298ef0e484ee
 )
 
 require (
 	github.com/magefile/mage v1.15.0 // indirect
 	github.com/shopspring/decimal v1.4.0 // indirect
-	golang.org/x/crypto v0.36.0 // indirect
-	golang.org/x/exp v0.0.0-20250305212735-054e65f0b394 // indirect
+	golang.org/x/crypto v0.38.0 // indirect
+	golang.org/x/exp v0.0.0-20250506013437-ce4c2cf36ca6 // indirect
 	golang.org/x/xerrors v0.0.0-20240903120638-7835f813f4da // indirect
 )
