@@ -14,8 +14,8 @@ github.com/stdutil/log v0.0.0-20241115150827-18730e91d3ec h1:xcocD99ZQV3R1HGhZYJ
 github.com/stdutil/log v0.0.0-20241115150827-18730e91d3ec/go.mod h1:wDyk7xCaS2MfSoWfBpTL0db/gyOvjM11hiCcFCc1mKE=
 github.com/stdutil/name-value v0.0.0-20250203071454-6cef1591014b h1:UdOwf6Fx0xkOBYopI+sPbT/EXWnb+Ef9xw71utRc42w=
 github.com/stdutil/name-value v0.0.0-20250203071454-6cef1591014b/go.mod h1:ysaYmeCi3f8wlYVy8smmLJq3hzoZ9i/yTOjR6Av3mew=
-github.com/stdutil/result v0.0.0-20250508015725-298ef0e484ee h1:HWvIYtBTCHR+2N5DMREyHrwnES9SZmmFPZmngJLOB2c=
-github.com/stdutil/result v0.0.0-20250508015725-298ef0e484ee/go.mod h1:6MRfkT0V6/ak4UQfWw/PaeZti6ofOru9nnzvj8ILlN4=
+github.com/stdutil/result v0.0.0-20250511025916-c346b9f8406a h1:F6aPkWCgWn1BRxjL4eeNvINN0uFtpSLol2LeL3tJdqw=
+github.com/stdutil/result v0.0.0-20250511025916-c346b9f8406a/go.mod h1:6MRfkT0V6/ak4UQfWw/PaeZti6ofOru9nnzvj8ILlN4=
 golang.org/x/crypto v0.0.0-20190308221718-c2843e01d9a2/go.mod h1:djNgcEr1/C05ACkg1iLfiJU5Ep61QUkGW8qpdssI0+w=
 golang.org/x/crypto v0.0.0-20190927123631-a832865fa7ad/go.mod h1:yigFU9vqHzYiE8UmvKecakEJjdnWj3jj499lnFckfCI=
 golang.org/x/crypto v0.38.0 h1:jt+WWG8IZlBnVbomuhg2Mdq0+BBQaHbtqHEFEigjUV8=

@@ -7,7 +7,7 @@ require (
 	github.com/gorilla/mux v1.8.1
 	github.com/stdutil/log v0.0.0-20241115150827-18730e91d3ec
 	github.com/stdutil/name-value v0.0.0-20250203071454-6cef1591014b
-	github.com/stdutil/result v0.0.0-20250508015725-298ef0e484ee
+	github.com/stdutil/result v0.0.0-20250511025916-c346b9f8406a
 )
 
 require (
