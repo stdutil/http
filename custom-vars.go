@@ -1,6 +1,8 @@
 package http
 
 import (
+	"strconv"
+
 	nv "github.com/stdutil/name-value"
 )
 
@@ -14,6 +16,9 @@ type CustomVars struct {
 	HasFormData    bool          // Indicates that the URL request has form data
 	IsMultipart    bool          // Indicates that the URL request is a multi part request
 	DecodedCommand nv.NameValues // Decoded commands from an encrypted values represented by q query string
+}
+type KeyTypes interface {
+	string | int | int64
 }
 
 // FirstCommand - get first command from route
@@ -52,4 +57,21 @@ func (cv CustomVars) GetCommand(index uint) (exists bool, value string) {
 		return false, ""
 	}
 	return true, cv.Command[index]
+}
+
+// RouteID extracts and converts a key from CustomVars to the desired type T.
+func RouteID[T KeyTypes](cv *CustomVars) T {
+	switch any(*new(T)).(type) {
+	case string:
+		return any(cv.Key).(T)
+	case int:
+		v, _ := strconv.Atoi(cv.Key)
+		return any(v).(T)
+	case int64:
+		v, _ := strconv.ParseInt(cv.Key, 10, 64)
+		return any(v).(T)
+	default:
+		var zero T
+		return zero
+	}
 }
