@@ -17,6 +17,8 @@ import (
 	"sync"
 	"time"
 
+	"maps"
+
 	"github.com/gbrlsnchs/jwt/v3"
 	"github.com/gorilla/mux"
 	"github.com/stdutil/log"
@@ -54,7 +56,6 @@ type (
 		TimeOut    int               // Request time out
 		Compressed bool              // Compressed
 		Headers    map[string]string // Headers for the request
-		Mutex      *sync.RWMutex     // Mutex lock for header modification
 	}
 	// RequestOption for <REST verb>Api request functions
 	RequestOption func(opt *RequestParam) error
@@ -75,24 +76,9 @@ func SetRequestTimeout(timeOut int) {
 
 // ExecuteJsonApi wraps http operation that change or read data and returns a custom result
 func ExecuteJsonApi(method string, endPoint string, payload []byte, opts ...RequestOption) (rd ResultData) {
-	var (
-		rw *sync.RWMutex
-	)
 	rd = ResultData{
 		Result: rslt.InitResult(),
 	}
-	rw = &sync.RWMutex{}
-
-	// Override header option
-	rp := RequestParam{}
-	for _, o := range opts {
-		if o == nil {
-			continue
-		}
-		o(&rp)
-	}
-	safeMapWrite(&rp.Headers, "Content-Type", "application/json", rw)
-
 	trd, err := ExecuteApi[ResultData](method, endPoint, payload, opts...)
 	if err != nil {
 		rd.Result.AddErr(err)
@@ -162,9 +148,7 @@ func ExecuteJsonApi(method string, endPoint string, payload []byte, opts ...Requ
 func ExecuteApi[T any](method string, endPoint string, payload []byte, opts ...RequestOption) (T, error) {
 	var x T
 
-	rp := RequestParam{
-		Compressed: false,
-	}
+	rp := RequestParam{}
 	for _, o := range opts {
 		if o == nil {
 			continue
@@ -281,27 +265,27 @@ func ExecuteApi[T any](method string, endPoint string, payload []byte, opts ...R
 
 // GetJson wraps http.Get and gets a raw json message data
 func GetJson(endpoint string, headers map[string]string, rw *sync.RWMutex) ResultData {
-	return ExecuteJsonApi("GET", endpoint, nil, Headers(headers, rw), TimeOut(reqTimeOut))
+	return ExecuteJsonApi("GET", endpoint, nil, Headers(headers), TimeOut(reqTimeOut))
 }
 
 // DeleteJson wraps http.Delete and gets a raw json message data
 func DeleteJson(endpoint string, headers map[string]string, rw *sync.RWMutex) ResultData {
-	return ExecuteJsonApi("DELETE", endpoint, nil, Headers(headers, rw), TimeOut(reqTimeOut))
+	return ExecuteJsonApi("DELETE", endpoint, nil, Headers(headers), TimeOut(reqTimeOut))
 }
 
 // PostJson wraps http.Post and gets a raw json message data
 func PostJson(endpoint string, payload []byte, gzipped bool, headers map[string]string, rw *sync.RWMutex) ResultData {
-	return ExecuteJsonApi("POST", endpoint, payload, Compressed(gzipped), Headers(headers, rw), TimeOut(reqTimeOut))
+	return ExecuteJsonApi("POST", endpoint, payload, Compressed(gzipped), Headers(headers), TimeOut(reqTimeOut))
 }
 
 // PutJson wraps http.Put and gets a raw json message data
 func PutJson(endpoint string, payload []byte, gzipped bool, headers map[string]string, rw *sync.RWMutex) ResultData {
-	return ExecuteJsonApi("PUT", endpoint, payload, Compressed(gzipped), Headers(headers, rw), TimeOut(reqTimeOut))
+	return ExecuteJsonApi("PUT", endpoint, payload, Compressed(gzipped), Headers(headers), TimeOut(reqTimeOut))
 }
 
 // PatchJson wraps http.Patch and gets a raw json message data
 func PatchJson(endpoint string, payload []byte, gzipped bool, headers map[string]string, rw *sync.RWMutex) ResultData {
-	return ExecuteJsonApi("PATCH", endpoint, payload, Compressed(gzipped), Headers(headers, rw), TimeOut(reqTimeOut))
+	return ExecuteJsonApi("PATCH", endpoint, payload, Compressed(gzipped), Headers(headers), TimeOut(reqTimeOut))
 }
 
 // ParseQueryString parses the query string into a column value
@@ -681,10 +665,9 @@ func Compressed(compressed bool) RequestOption {
 // Headers adds request headers as an option
 //
 // This is used with <REST verb>Api functions
-func Headers(hdr map[string]string, mut *sync.RWMutex) RequestOption {
+func Headers(hdr map[string]string) RequestOption {
 	return func(rp *RequestParam) error {
-		rp.Headers = hdr
-		rp.Mutex = mut
+		maps.Copy(rp.Headers, hdr)
 		return nil
 	}
 }
@@ -699,31 +682,15 @@ func CreateApi[T any, U any](url string, pl U, opts ...RequestOption) rslt.Resul
 			),
 		}
 	}
-	rp := RequestParam{
-		Compressed: false,
-	}
-	for _, o := range opts {
-		if o == nil {
-			continue
-		}
-		o(&rp)
-	}
-	rd := ExecuteJsonApi("POST", url, b, Compressed(rp.Compressed), Headers(rp.Headers, rp.Mutex), TimeOut(rp.TimeOut))
+	opts = append(opts, Compressed(false)) // last one will override
+	rd := ExecuteJsonApi("POST", url, b, opts...)
 	return getJsonConverted[T](&rd)
 }
 
 // ReadApi retrieves data on an API endpoint and converts the returned data into a resulting type
 func ReadApi[T any](url string, opts ...RequestOption) rslt.ResultAny[T] {
-	rp := RequestParam{
-		Compressed: true,
-	}
-	for _, o := range opts {
-		if o == nil {
-			continue
-		}
-		o(&rp)
-	}
-	rd := ExecuteJsonApi("GET", url, nil, Compressed(rp.Compressed), Headers(rp.Headers, rp.Mutex), TimeOut(rp.TimeOut))
+	opts = append(opts, Compressed(true)) // last one will override
+	rd := ExecuteJsonApi("GET", url, nil, opts...)
 	return getJsonConverted[T](&rd)
 }
 
@@ -735,29 +702,15 @@ func UpdateApi[T any, U any](url string, pl U, opts ...RequestOption) rslt.Resul
 			Result: rslt.InitResult(rslt.WithMessage(err.Error())),
 		}
 	}
-	rp := RequestParam{}
-	for _, o := range opts {
-		if o == nil {
-			continue
-		}
-		o(&rp)
-	}
-	rd := ExecuteJsonApi("PUT", url, b, Compressed(rp.Compressed), Headers(rp.Headers, rp.Mutex), TimeOut(rp.TimeOut))
+	opts = append(opts, Compressed(false)) // last one will override
+	rd := ExecuteJsonApi("PUT", url, b, opts...)
 	return getJsonConverted[T](&rd)
 }
 
 // DeleteApi deletes data on an API endpoint and converts the returned data into a resulting type
 func DeleteApi[T any](url string, opts ...RequestOption) rslt.ResultAny[T] {
-	rp := RequestParam{
-		Compressed: false,
-	}
-	for _, o := range opts {
-		if o == nil {
-			continue
-		}
-		o(&rp)
-	}
-	rd := ExecuteJsonApi("DELETE", url, nil, Compressed(rp.Compressed), Headers(rp.Headers, rp.Mutex), TimeOut(rp.TimeOut))
+	opts = append(opts, Compressed(false)) // last one will override
+	rd := ExecuteJsonApi("DELETE", url, nil, opts...)
 	return getJsonConverted[T](&rd)
 }
 
@@ -769,16 +722,8 @@ func PatchApi[T any, U any](url string, pl U, opts ...RequestOption) rslt.Result
 			Result: rslt.InitResult(rslt.WithMessage(err.Error())),
 		}
 	}
-	rp := RequestParam{
-		Compressed: false,
-	}
-	for _, o := range opts {
-		if o == nil {
-			continue
-		}
-		o(&rp)
-	}
-	rd := ExecuteJsonApi("PATCH", url, b, Compressed(rp.Compressed), Headers(rp.Headers, rp.Mutex), TimeOut(rp.TimeOut))
+	opts = append(opts, Compressed(false)) // last one will override
+	rd := ExecuteJsonApi("PATCH", url, b, opts...)
 	return getJsonConverted[T](&rd)
 }
 
