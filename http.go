@@ -667,6 +667,9 @@ func Compressed(compressed bool) RequestOption {
 // This is used with <REST verb>Api functions
 func Headers(hdr map[string]string) RequestOption {
 	return func(rp *RequestParam) error {
+		if rp.Headers == nil {
+			rp.Headers = make(map[string]string)
+		}
 		maps.Copy(rp.Headers, hdr)
 		return nil
 	}
