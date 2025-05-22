@@ -85,13 +85,13 @@ func ExecuteJsonApi(method string, endPoint string, payload []byte, opts ...Requ
 
 	// Override header option
 	rp := RequestParam{}
-	safeMapWrite(&rp.Headers, "Content-Type", "application/json", rw)
 	for _, o := range opts {
 		if o == nil {
 			continue
 		}
 		o(&rp)
 	}
+	safeMapWrite(&rp.Headers, "Content-Type", "application/json", rw)
 
 	trd, err := ExecuteApi[ResultData](method, endPoint, payload, opts...)
 	if err != nil {
