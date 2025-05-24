@@ -15,7 +15,7 @@ import (
 	"time"
 
 	"github.com/gbrlsnchs/jwt/v3"
-	"github.com/gorilla/mux"
+	"github.com/go-chi/chi/v5"
 	"github.com/stdutil/log"
 	nv "github.com/stdutil/name-value"
 	rslt "github.com/stdutil/result"
@@ -305,17 +305,20 @@ func GetRequestVars(r *http.Request, secretKey string, validateTimes, preserveCm
 // GetRouteVar retrieves the variable in the route to the desired type T.
 func GetRouteVar[T KeyTypes](r *http.Request, name string) T {
 	var zero T
-	s, ok := mux.Vars(r)[name]
-	if !ok {
-		return zero
-	}
+	s := chi.URLParam(r, name)
 	switch any(*new(T)).(type) {
 	case string:
 		return any(s).(T)
 	case int:
+		if len(s) == 0 {
+			return zero
+		}
 		v, _ := strconv.Atoi(s)
 		return any(v).(T)
 	case int64:
+		if len(s) == 0 {
+			return zero
+		}
 		v, _ := strconv.ParseInt(s, 10, 64)
 		return any(v).(T)
 	}
@@ -471,10 +474,9 @@ func ParseJwt(token, secretKey string, validateTimes bool) (*JWTInfo, error) {
 	}, nil
 }
 
-// ParseRouteVars parses custom routes from a mux handler
+// ParseRouteVars parses custom routes from a route handler
 func ParseRouteVars(r *http.Request, preserveCmdCase bool) ([]string, string) {
-	m := mux.CurrentRoute(r)
-	pt, _ := m.GetPathTemplate()
+	pt := chi.RouteContext(r.Context()).RoutePattern()
 	ptn := strings.Replace(r.URL.Path, pt, "", -1) // Trim the url by URL path. The remaining text will be the path to evaluate
 	return ParsePath(ptn, !preserveCmdCase, false)
 }
