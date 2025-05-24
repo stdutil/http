@@ -7,17 +7,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"mime/multipart"
 	"net/http"
 	"net/url"
-	"os"
-	"path/filepath"
 	"reflect"
 	"strings"
-	"sync"
 	"time"
-
-	"maps"
 
 	"github.com/gbrlsnchs/jwt/v3"
 	"github.com/gorilla/mux"
@@ -27,13 +21,18 @@ import (
 )
 
 const (
-	REQUEST_VERSION  string = "1.0.0.0"
-	REQUEST_MODIFIED string = "30012025"
+	REQUEST_VERSION  string = "1.1.0.0"
+	REQUEST_MODIFIED string = "24052025"
 )
 
 var (
-	reqTimeOut int
-	ct         *http.Transport
+	rto int // Request timeout in seconds
+	ct  *http.Transport
+)
+
+var (
+	ErrRequestHasNoPayload = errors.New(`the request has no payload`)
+	ErrInvalidAccessToken  = errors.New(`invalid access token`)
 )
 
 type (
@@ -51,93 +50,14 @@ type (
 		rslt.Result
 		Data json.RawMessage `json:"data"`
 	}
-	// RequestParam for <REST verb>Api request functions
-	RequestParam struct {
-		TimeOut    int               // Request time out
-		Compressed bool              // Compressed
-		Headers    map[string]string // Headers for the request
-	}
-	// RequestOption for <REST verb>Api request functions
-	RequestOption func(opt *RequestParam) error
 )
 
 func init() {
-	reqTimeOut = 30
+	rto = 30
 	ct = http.DefaultTransport.(*http.Transport).Clone()
 	ct.MaxIdleConns = 100
 	ct.MaxConnsPerHost = 100
 	ct.MaxIdleConnsPerHost = 100
-}
-
-// SetRequestTimeOut sets the new timeout value
-func SetRequestTimeout(timeOut int) {
-	reqTimeOut = timeOut
-}
-
-// ExecuteJsonApi wraps http operation that change or read data and returns a custom result
-func ExecuteJsonApi(method string, endPoint string, payload []byte, opts ...RequestOption) (rd ResultData) {
-	rd = ResultData{
-		Result: rslt.InitResult(),
-	}
-	trd, err := ExecuteApi[ResultData](method, endPoint, payload, opts...)
-	if err != nil {
-		rd.Result.AddErr(err)
-		return
-	}
-	// if len(data) == 0 {
-	// 	return
-	// }
-
-	// // Create a temporary result data for unmarshalling purposes
-	// // The internal Log field is not populated when unmarshalling
-	// trd := ResultData{}
-	// if err = json.Unmarshal(data, &trd); err != nil {
-	// 	rd.Result.AddErr(err)
-	// 	rd.Data = data // This is not marshable to resultdata, we'll try to send the real result
-	// 	return
-	// }
-
-	// Assign temp to result
-	rd.Data = trd.Data
-	rd.FocusControl = trd.FocusControl
-	rd.Operation = trd.Operation
-	rd.Page = trd.Page
-	rd.PageCount = trd.PageCount
-	rd.PageSize = trd.PageCount
-	rd.Tag = trd.Tag
-	rd.TaskID = trd.TaskID
-	rd.WorkerID = trd.WorkerID
-	rd.Return(rslt.Status(trd.Status))
-	for _, m := range trd.Messages {
-		if m == "" {
-			continue
-		}
-		msgType := m[0:3]
-		msg := m[3:]
-		if strings.HasPrefix(msg, ":") {
-			msg = msg[2:]
-		}
-		if strings.HasPrefix(msg, "[") {
-			if endBr := strings.Index(msg, "]"); endBr != -1 {
-				rd.Prefix = msg[1:endBr]
-				msg = msg[endBr+3:]
-			}
-		}
-		switch msgType {
-		case string(log.Warn):
-			rd.Result.AddWarning(msg)
-		case string(log.Error):
-			rd.Result.AddError(msg)
-		case string(log.Fatal):
-			rd.Result.AddError(msg)
-		case string(log.Success):
-			rd.Result.AddSuccess(msg)
-		case string(log.App):
-			rd.Result.AddRawMsg(msg)
-		}
-	}
-
-	return
 }
 
 // ExecuteApi wraps http operation that change or read data and returns a byte array
@@ -263,29 +183,116 @@ func ExecuteApi[T any](method string, endPoint string, payload []byte, opts ...R
 	return x, nil
 }
 
-// GetJson wraps http.Get and gets a raw json message data
-func GetJson(endpoint string, headers map[string]string, rw *sync.RWMutex) ResultData {
-	return ExecuteJsonApi("GET", endpoint, nil, Headers(headers), TimeOut(reqTimeOut))
+// ExecuteJsonApi wraps http operation that change or read data and returns a custom result
+func ExecuteJsonApi(method string, endPoint string, payload []byte, opts ...RequestOption) (rd ResultData) {
+	rd = ResultData{
+		Result: rslt.InitResult(),
+	}
+	trd, err := ExecuteApi[ResultData](method, endPoint, payload, opts...)
+	if err != nil {
+		rd.Result.AddErr(err)
+		return
+	}
+	// if len(data) == 0 {
+	// 	return
+	// }
+
+	// // Create a temporary result data for unmarshalling purposes
+	// // The internal Log field is not populated when unmarshalling
+	// trd := ResultData{}
+	// if err = json.Unmarshal(data, &trd); err != nil {
+	// 	rd.Result.AddErr(err)
+	// 	rd.Data = data // This is not marshable to resultdata, we'll try to send the real result
+	// 	return
+	// }
+
+	// Assign temp to result
+	rd.Data = trd.Data
+	rd.FocusControl = trd.FocusControl
+	rd.Operation = trd.Operation
+	rd.Page = trd.Page
+	rd.PageCount = trd.PageCount
+	rd.PageSize = trd.PageCount
+	rd.Tag = trd.Tag
+	rd.TaskID = trd.TaskID
+	rd.WorkerID = trd.WorkerID
+	rd.Return(rslt.Status(trd.Status))
+	for _, m := range trd.Messages {
+		if m == "" {
+			continue
+		}
+		msgType := m[0:3]
+		msg := m[3:]
+		if strings.HasPrefix(msg, ":") {
+			msg = msg[2:]
+		}
+		if strings.HasPrefix(msg, "[") {
+			if endBr := strings.Index(msg, "]"); endBr != -1 {
+				rd.Prefix = msg[1:endBr]
+				msg = msg[endBr+3:]
+			}
+		}
+		switch msgType {
+		case string(log.Warn):
+			rd.Result.AddWarning(msg)
+		case string(log.Error):
+			rd.Result.AddError(msg)
+		case string(log.Fatal):
+			rd.Result.AddError(msg)
+		case string(log.Success):
+			rd.Result.AddSuccess(msg)
+		case string(log.App):
+			rd.Result.AddRawMsg(msg)
+		}
+	}
+
+	return
 }
 
-// DeleteJson wraps http.Delete and gets a raw json message data
-func DeleteJson(endpoint string, headers map[string]string, rw *sync.RWMutex) ResultData {
-	return ExecuteJsonApi("DELETE", endpoint, nil, Headers(headers), TimeOut(reqTimeOut))
+// GetBody retrieves the request body
+func GetBody(r *http.Request) []byte {
+	return getBody(r, nil)
 }
 
-// PostJson wraps http.Post and gets a raw json message data
-func PostJson(endpoint string, payload []byte, gzipped bool, headers map[string]string, rw *sync.RWMutex) ResultData {
-	return ExecuteJsonApi("POST", endpoint, payload, Compressed(gzipped), Headers(headers), TimeOut(reqTimeOut))
+// GetRequestVarsOnly get request variables
+func GetRequestVarsOnly(r *http.Request, preserveCmdCase bool) RequestVars {
+	rv := &RequestVars{
+		Method: strings.ToUpper(r.Method),
+	}
+	rv.Body = getBody(r, &rv.Variables.IsMultipart)
+	rv.HasBody = len(rv.Body) > 0
+
+	// Query Strings
+	rv.Variables.QueryString = ParseQueryString(&r.URL.RawQuery)
+	rv.Variables.HasQueryString = len(rv.Variables.QueryString.Pair) > 0
+	if rv.Variables.IsMultipart {
+		r.ParseMultipartForm(30 << 20)
+	} else {
+		r.ParseForm()
+	}
+	// Get Form data
+	rv.Variables.FormData = nv.NameValues{
+		Pair: make(map[string]any),
+	}
+	for k, v := range r.PostForm {
+		rv.Variables.FormData.Pair[k] = strings.Join(v[:], ",")
+	}
+	rv.Variables.HasFormData = len(rv.Variables.FormData.Pair) > 0
+	// Get route commands
+	rv.Variables.Command, rv.Variables.Key = ParseRouteVars(r, preserveCmdCase)
+	return *rv
 }
 
-// PutJson wraps http.Put and gets a raw json message data
-func PutJson(endpoint string, payload []byte, gzipped bool, headers map[string]string, rw *sync.RWMutex) ResultData {
-	return ExecuteJsonApi("PUT", endpoint, payload, Compressed(gzipped), Headers(headers), TimeOut(reqTimeOut))
-}
-
-// PatchJson wraps http.Patch and gets a raw json message data
-func PatchJson(endpoint string, payload []byte, gzipped bool, headers map[string]string, rw *sync.RWMutex) ResultData {
-	return ExecuteJsonApi("PATCH", endpoint, payload, Compressed(gzipped), Headers(headers), TimeOut(reqTimeOut))
+// IsJsonGood checks if the request has body and attempts to marshal to Json
+func IsJsonGood(r *http.Request, v any) error {
+	b := getBody(r, nil)
+	if len(b) == 0 {
+		return ErrRequestHasNoPayload
+	}
+	if err := json.Unmarshal(b, &v); err != nil {
+		return err
+	}
+	return nil
 }
 
 // ParseQueryString parses the query string into a column value
@@ -391,6 +398,69 @@ func ParsePath(urlPath string, normalizePathCase, inclSlashPfx bool) ([]string, 
 	return paths, id
 }
 
+// ParseJwt validates, parses JWT and returns information using HMAC256 algorithm
+func ParseJwt(token, secretKey string, validateTimes bool) (*JWTInfo, error) {
+	if len(secretKey) == 0 {
+		return nil, fmt.Errorf(`secret key not set`)
+	}
+	var (
+		pl  CustomPayload
+		err error
+	)
+
+	// Parse JWT
+	HMAC := jwt.NewHS256([]byte(secretKey))
+
+	// Validate claims "iat", "exp" and "aud".
+	if validateTimes {
+		now := time.Now()
+		// Use jwt.ValidatePayload to build a jwt.VerifyOption.
+		// Validators are run in the order informed.
+		validator := jwt.ValidatePayload(
+			&pl.Payload,
+			jwt.IssuedAtValidator(now),
+			jwt.ExpirationTimeValidator(now),
+			jwt.NotBeforeValidator(now))
+		_, err = jwt.Verify([]byte(token), HMAC, &pl, validator)
+	} else {
+		_, err = jwt.Verify([]byte(token), HMAC, &pl)
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &JWTInfo{
+		Audience:      pl.Audience,
+		UserName:      pl.UserName,
+		Domain:        pl.Domain,
+		DeviceID:      pl.DeviceID,
+		ApplicationID: pl.ApplicationID,
+		TenantID:      pl.TenantID,
+		Raw:           token,
+		Valid:         true,
+	}, nil
+}
+
+// GetRequestVars requests variables and return JWT validation result
+func GetRequestVars(r *http.Request, secretKey string, validateTimes, preserveCmdCase bool) (RequestVars, error) {
+	rv := GetRequestVarsOnly(r, preserveCmdCase)
+	rv.Token = nil
+	// Silently ignore OPTIONS methid
+	if strings.EqualFold(r.Method, "OPTIONS") {
+		return rv, nil
+	}
+	ji, err := ValidateJwt(r, secretKey, validateTimes)
+	if err != nil {
+		return rv, err
+	}
+	rv.Token = ji
+	return rv, nil
+}
+
+// SetRequestTimeOut sets the new timeout value
+func SetRequestTimeout(timeOut int) {
+	rto = timeOut
+}
+
 // SignJwt builds a JWT token using HMAC256 algorithm
 func SignJwt(claims *map[string]interface{}, secretKey string) string {
 	clm := *claims
@@ -487,57 +557,6 @@ func SignJwt(claims *map[string]interface{}, secretKey string) string {
 	return string(token)
 }
 
-// GetRequestVarsOnly get request variables
-func GetRequestVarsOnly(r *http.Request, preserveCmdCase bool) RequestVars {
-	var (
-		c1 string
-	)
-	const (
-		mulpart string = "multipart/form-data"
-		furlenc string = "application/x-www-form-urlencoded"
-	)
-	rv := &RequestVars{
-		Method: strings.ToUpper(r.Method),
-	}
-	if ctype := strings.Split(r.Header.Get("Content-Type"), ";"); len(ctype) > 0 {
-		c1 = strings.TrimSpace(ctype[0])
-	}
-	if useBody := (c1 != furlenc && c1 != mulpart) && (rv.IsPostOrPut() || rv.IsDelete()); useBody {
-		// We are receiving body as bytes to Unmarshall later depending on the type
-		b := func() []byte {
-			if r.Body != nil {
-				b, _ := io.ReadAll(r.Body)
-				defer r.Body.Close()
-				return b
-			}
-			return []byte{}
-		}
-		if rv.Body = b(); rv.Body != nil {
-			rv.HasBody = len(rv.Body) > 0
-		}
-	}
-	// Query Strings
-	rv.Variables.QueryString = ParseQueryString(&r.URL.RawQuery)
-	rv.Variables.HasQueryString = len(rv.Variables.QueryString.Pair) > 0
-	rv.Variables.IsMultipart = (c1 == mulpart)
-	if rv.Variables.IsMultipart {
-		r.ParseMultipartForm(30 << 20)
-	} else {
-		r.ParseForm()
-	}
-	// Get Form data
-	rv.Variables.FormData = nv.NameValues{
-		Pair: make(map[string]any),
-	}
-	for k, v := range r.PostForm {
-		rv.Variables.FormData.Pair[k] = strings.Join(v[:], ",")
-	}
-	rv.Variables.HasFormData = len(rv.Variables.FormData.Pair) > 0
-	// Get route commands
-	rv.Variables.Command, rv.Variables.Key = ParseRouteVars(r, preserveCmdCase)
-	return *rv
-}
-
 // ValidateJwt validates JWT and returns information using HMAC256 algorithm
 func ValidateJwt(r *http.Request, secretKey string, validateTimes bool) (*JWTInfo, error) {
 	var (
@@ -561,62 +580,36 @@ func ValidateJwt(r *http.Request, secretKey string, validateTimes bool) (*JWTInf
 	return ParseJwt(jwtfromck, secretKey, validateTimes)
 }
 
-// ParseJwt validates, parses JWT and returns information using HMAC256 algorithm
-func ParseJwt(token, secretKey string, validateTimes bool) (*JWTInfo, error) {
-	if len(secretKey) == 0 {
-		return nil, fmt.Errorf(`secret key not set`)
-	}
+func getBody(r *http.Request, isMultiPart *bool) []byte {
 	var (
-		pl  CustomPayload
-		err error
+		body []byte
+		c1   string
 	)
-
-	// Parse JWT
-	HMAC := jwt.NewHS256([]byte(secretKey))
-
-	// Validate claims "iat", "exp" and "aud".
-	if validateTimes {
-		now := time.Now()
-		// Use jwt.ValidatePayload to build a jwt.VerifyOption.
-		// Validators are run in the order informed.
-		validator := jwt.ValidatePayload(
-			&pl.Payload,
-			jwt.IssuedAtValidator(now),
-			jwt.ExpirationTimeValidator(now),
-			jwt.NotBeforeValidator(now))
-		_, err = jwt.Verify([]byte(token), HMAC, &pl, validator)
-	} else {
-		_, err = jwt.Verify([]byte(token), HMAC, &pl)
+	const (
+		mulpart string = "multipart/form-data"
+		furlenc string = "application/x-www-form-urlencoded"
+	)
+	if cType := strings.Split(r.Header.Get("Content-Type"), ";"); len(cType) > 0 {
+		c1 = strings.TrimSpace(cType[0])
 	}
-	if err != nil {
-		return nil, err
+	method := strings.ToUpper(r.Method)
+	if isMultiPart == nil {
+		isMultiPart = new(bool)
 	}
-	return &JWTInfo{
-		Audience:      pl.Audience,
-		UserName:      pl.UserName,
-		Domain:        pl.Domain,
-		DeviceID:      pl.DeviceID,
-		ApplicationID: pl.ApplicationID,
-		TenantID:      pl.TenantID,
-		Raw:           token,
-		Valid:         true,
-	}, nil
-}
-
-// GetRequestVars requests variables and return JWT validation result
-func GetRequestVars(r *http.Request, secretKey string, validateTimes, preserveCmdCase bool) (RequestVars, error) {
-	rv := GetRequestVarsOnly(r, preserveCmdCase)
-	rv.Token = nil
-	// silently ignore OPTION methid
-	if strings.EqualFold(r.Method, "OPTION") {
-		return rv, nil
+	*isMultiPart = c1 != mulpart
+	if useBody := (c1 != furlenc && c1 != mulpart) && (method == "POST" || method == "PUT" || method == "DELETE"); useBody {
+		// We are receiving body as bytes to Unmarshall later depending on the type
+		b := func() []byte {
+			if r.Body != nil {
+				b, _ := io.ReadAll(r.Body)
+				defer r.Body.Close()
+				return b
+			}
+			return []byte{}
+		}
+		body = b()
 	}
-	ji, err := ValidateJwt(r, secretKey, validateTimes)
-	if err != nil {
-		return rv, err
-	}
-	rv.Token = ji
-	return rv, nil
+	return body
 }
 
 func getJsonConverted[T any](result *ResultData) rslt.ResultAny[T] {
@@ -642,211 +635,15 @@ func getJsonConverted[T any](result *ResultData) rslt.ResultAny[T] {
 	}
 }
 
-// TimeOut sets the request timeout as an option
-//
-// This is used with <REST verb>Api functions
-func TimeOut(timeOut int) RequestOption {
-	return func(rp *RequestParam) error {
-		rp.TimeOut = timeOut
-		return nil
-	}
-}
-
-// Compressed sets the request compression as an option
-//
-// This is used with <REST verb>Api functions
-func Compressed(compressed bool) RequestOption {
-	return func(rp *RequestParam) error {
-		rp.Compressed = compressed
-		return nil
-	}
-}
-
-// Headers adds request headers as an option
-//
-// This is used with <REST verb>Api functions
-func Headers(hdr map[string]string) RequestOption {
-	return func(rp *RequestParam) error {
-		if rp.Headers == nil {
-			rp.Headers = make(map[string]string)
-		}
-		maps.Copy(rp.Headers, hdr)
-		return nil
-	}
-}
-
-// CreateApi posts data on an API endpoint and converts the returned data into a resulting type
-func CreateApi[T any, U any](url string, pl U, opts ...RequestOption) rslt.ResultAny[T] {
-	b, err := json.Marshal(pl)
-	if err != nil {
-		return rslt.ResultAny[T]{
-			Result: rslt.InitResult(
-				rslt.WithMessage(err.Error()),
-			),
-		}
-	}
-	opts = append(opts, Compressed(false)) // last one will override
-	rd := ExecuteJsonApi("POST", url, b, opts...)
-	return getJsonConverted[T](&rd)
-}
-
-// ReadApi retrieves data on an API endpoint and converts the returned data into a resulting type
-func ReadApi[T any](url string, opts ...RequestOption) rslt.ResultAny[T] {
-	opts = append(opts, Compressed(true)) // last one will override
-	rd := ExecuteJsonApi("GET", url, nil, opts...)
-	return getJsonConverted[T](&rd)
-}
-
-// UpdateApi updates data on an API endpoint and converts the returned data into a resulting type
-func UpdateApi[T any, U any](url string, pl U, opts ...RequestOption) rslt.ResultAny[T] {
-	b, err := json.Marshal(pl)
-	if err != nil {
-		return rslt.ResultAny[T]{
-			Result: rslt.InitResult(rslt.WithMessage(err.Error())),
-		}
-	}
-	opts = append(opts, Compressed(false)) // last one will override
-	rd := ExecuteJsonApi("PUT", url, b, opts...)
-	return getJsonConverted[T](&rd)
-}
-
-// DeleteApi deletes data on an API endpoint and converts the returned data into a resulting type
-func DeleteApi[T any](url string, opts ...RequestOption) rslt.ResultAny[T] {
-	opts = append(opts, Compressed(false)) // last one will override
-	rd := ExecuteJsonApi("DELETE", url, nil, opts...)
-	return getJsonConverted[T](&rd)
-}
-
-// PatchApi patches data on an API endpoint and converts the returned data into a resulting type
-func PatchApi[T any, U any](url string, pl U, opts ...RequestOption) rslt.ResultAny[T] {
-	b, err := json.Marshal(pl)
-	if err != nil {
-		return rslt.ResultAny[T]{
-			Result: rslt.InitResult(rslt.WithMessage(err.Error())),
-		}
-	}
-	opts = append(opts, Compressed(false)) // last one will override
-	rd := ExecuteJsonApi("PATCH", url, b, opts...)
-	return getJsonConverted[T](&rd)
-}
-
-// StoreUpload stores the form file upload into a temporary file returning the following values:
-//
-//   - TempFileName - temporary file name
-//   - UploadFileName - original file name to upload
-//   - UploadFileExt - original file name extension
-//   - UploadFileSize - file size of the upload
-//   - err - error information
-func StoreUpload(r *http.Request, formName string) (TempFileName, UploadFileName, UploadFileExt string, UploadFileSize int64, err error) {
-	var (
-		ff       multipart.File
-		fh       *multipart.FileHeader
-		tempFile *os.File
-	)
-
-	if formName == "" {
-		formName = "file"
-	}
-
-	ff, fh, err = r.FormFile(formName)
-	if err != nil {
-		return TempFileName, UploadFileName, UploadFileExt, UploadFileSize, err
-	}
-	defer ff.Close()
-
-	if fh == nil {
-		err = fmt.Errorf("no file was detected")
-		return TempFileName, UploadFileName, UploadFileExt, UploadFileSize, err
-	}
-
-	fext := strings.ToLower(filepath.Ext(fh.Filename))
-	tempFile, err = os.CreateTemp(os.TempDir(), "*"+fext)
-	if err != nil {
-		return TempFileName, UploadFileName, UploadFileExt, UploadFileSize, err
-	}
-	defer tempFile.Close()
-
-	var (
-		n  int
-		nt int64
-	)
-	buff := make([]byte, 4096)
-	for {
-		n, err = ff.Read(buff)
-		if err != nil && err != io.EOF {
-			return TempFileName, UploadFileName, UploadFileExt, UploadFileSize, err
-		}
-		if n == 0 {
-			break
-		}
-		_, err = tempFile.WriteAt(buff[0:n], nt)
-		if err != nil {
-			return TempFileName, UploadFileName, UploadFileExt, UploadFileSize, err
-		}
-		nt += int64(n)
-	}
-	if nt == 0 {
-		err = fmt.Errorf("zero bytes read")
-		return TempFileName, UploadFileName, UploadFileExt, UploadFileSize, err
-	}
-
-	// Prepare valid result
-	UploadFileName = fh.Filename
-	UploadFileExt = strings.ToLower(filepath.Ext(UploadFileName))
-	UploadFileSize = fh.Size
-	TempFileName = tempFile.Name()
-
-	return TempFileName, UploadFileName, UploadFileExt, UploadFileSize, nil
-}
-
-// CreateUpload creates an uploadable data for http upload
-//
-// The function returns the following:
-//   - *bytes.Buffer: The buffer data. To get bytes, it call the Bytes() function
-//   - string: content type of the file
-//   - error
-func CreateUpload(fileName, formName string) (*bytes.Buffer, string, error) {
-	var (
-		err         error
-		payload     *bytes.Buffer
-		file        *os.File
-		ioW         io.Writer
-		contentType string
-	)
-
-	payload = &bytes.Buffer{}
-	writer := multipart.NewWriter(payload)
-	file, err = os.Open(fileName)
-	if err != nil {
-		return payload, contentType, err
-	}
-	defer file.Close()
-
-	ioW, err = writer.CreateFormFile(formName, filepath.Base(fileName))
-	if err != nil {
-		return payload, contentType, err
-	}
-	_, err = io.Copy(ioW, file)
-	if err != nil {
-		return payload, contentType, err
-	}
-	err = writer.Close()
-	if err != nil {
-		return payload, contentType, err
-	}
-	contentType = writer.FormDataContentType()
-	return payload, contentType, err
-}
-
-func safeMapWrite[T any](ptrMap *map[string]T, key string, value T, rw *sync.RWMutex) bool {
-	defer func() {
-		recover()
-	}()
-	// Prepare mutex
-	// attempt writing to map
-	if rw.TryLock() {
-		defer rw.Unlock()
-		(*ptrMap)[key] = value
-	}
-	return true
-}
+// func safeMapWrite[T any](ptrMap *map[string]T, key string, value T, rw *sync.RWMutex) bool {
+// 	defer func() {
+// 		recover()
+// 	}()
+// 	// Prepare mutex
+// 	// attempt writing to map
+// 	if rw.TryLock() {
+// 		defer rw.Unlock()
+// 		(*ptrMap)[key] = value
+// 	}
+// 	return true
+// }
