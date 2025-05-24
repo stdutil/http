@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"reflect"
+	"strconv"
 	"strings"
 	"time"
 
@@ -283,6 +284,42 @@ func GetRequestVarsOnly(r *http.Request, preserveCmdCase bool) RequestVars {
 	return *rv
 }
 
+// GetRequestVars requests variables and return JWT validation result
+func GetRequestVars(r *http.Request, secretKey string, validateTimes, preserveCmdCase bool) (RequestVars, error) {
+	rv := GetRequestVarsOnly(r, preserveCmdCase)
+	rv.Token = nil
+	// Silently ignore OPTIONS methid
+	if strings.EqualFold(r.Method, "OPTIONS") {
+		return rv, nil
+	}
+	ji, err := ValidateJwt(r, secretKey, validateTimes)
+	if err != nil {
+		return rv, err
+	}
+	rv.Token = ji
+	return rv, nil
+}
+
+// GetRouteVar retrieves the variable in the route to the desired type T.
+func GetRouteVar[T KeyTypes](r *http.Request, name string) T {
+	var zero T
+	s, ok := mux.Vars(r)[name]
+	if !ok {
+		return zero
+	}
+	switch any(*new(T)).(type) {
+	case string:
+		return any(s).(T)
+	case int:
+		v, _ := strconv.Atoi(s)
+		return any(v).(T)
+	case int64:
+		v, _ := strconv.ParseInt(s, 10, 64)
+		return any(v).(T)
+	}
+	return zero
+}
+
 // IsJsonGood checks if the request has body and attempts to marshal to Json
 func IsJsonGood(r *http.Request, v any) error {
 	b := getBody(r, nil)
@@ -305,14 +342,6 @@ func ParseQueryString(qs *string) nv.NameValues {
 		ret.Pair[k] = strings.Join(v[:], ",")
 	}
 	return ret
-}
-
-// ParseRouteVars parses custom routes from a mux handler
-func ParseRouteVars(r *http.Request, preserveCmdCase bool) ([]string, string) {
-	m := mux.CurrentRoute(r)
-	pt, _ := m.GetPathTemplate()
-	ptn := strings.Replace(r.URL.Path, pt, "", -1) // Trim the url by URL path. The remaining text will be the path to evaluate
-	return ParsePath(ptn, !preserveCmdCase, false)
 }
 
 // ParsePath parses a url path and returns an array of path
@@ -440,20 +469,12 @@ func ParseJwt(token, secretKey string, validateTimes bool) (*JWTInfo, error) {
 	}, nil
 }
 
-// GetRequestVars requests variables and return JWT validation result
-func GetRequestVars(r *http.Request, secretKey string, validateTimes, preserveCmdCase bool) (RequestVars, error) {
-	rv := GetRequestVarsOnly(r, preserveCmdCase)
-	rv.Token = nil
-	// Silently ignore OPTIONS methid
-	if strings.EqualFold(r.Method, "OPTIONS") {
-		return rv, nil
-	}
-	ji, err := ValidateJwt(r, secretKey, validateTimes)
-	if err != nil {
-		return rv, err
-	}
-	rv.Token = ji
-	return rv, nil
+// ParseRouteVars parses custom routes from a mux handler
+func ParseRouteVars(r *http.Request, preserveCmdCase bool) ([]string, string) {
+	m := mux.CurrentRoute(r)
+	pt, _ := m.GetPathTemplate()
+	ptn := strings.Replace(r.URL.Path, pt, "", -1) // Trim the url by URL path. The remaining text will be the path to evaluate
+	return ParsePath(ptn, !preserveCmdCase, false)
 }
 
 // SetRequestTimeOut sets the new timeout value
