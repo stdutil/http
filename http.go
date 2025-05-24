@@ -37,8 +37,8 @@ var (
 )
 
 type (
-	// RequestContextType is a custom type for request context
-	RequestContextType string
+	// ContextKey is a custom type for request context
+	ContextKey string
 	// CustomPayload - payload for JWT
 	CustomPayload struct {
 		jwt.Payload
