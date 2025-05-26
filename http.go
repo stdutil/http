@@ -474,7 +474,7 @@ func ParseJwt(token, secretKey string, validateTimes bool) (*JWTInfo, error) {
 
 // ParseRouteVars parses custom routes from a route handler
 func ParseRouteVars(r *http.Request, preserveCmdCase bool) ([]string, string) {
-	pt := chi.RouteContext(r.Context()).RoutePattern()
+	pt := strings.TrimSuffix(chi.RouteContext(r.Context()).RoutePattern(), "*")
 	ptn := strings.Replace(r.URL.Path, pt, "", -1) // Trim the url by URL path. The remaining text will be the path to evaluate
 	return ParsePath(ptn, !preserveCmdCase, false)
 }
