@@ -66,122 +66,219 @@ func init() {
 // On headers:
 //   - Content-Type: If this header is not set, it defaults to "application/json"
 //   - Content-Encoding: If compressed is true, it is set to "gzip"
-func ExecuteApi[T any](method string, endPoint string, payload []byte, opts ...RequestOption) (T, error) {
+// func ExecuteApi[T any](method string, endPoint string, payload []byte, opts ...RequestOption) (T, error) {
+// 	var x T
+
+// 	rp := RequestParam{}
+// 	for _, o := range opts {
+// 		if o == nil {
+// 			continue
+// 		}
+// 		o(&rp)
+// 	}
+
+// 	nr, err := http.NewRequest(method, endPoint, bytes.NewBuffer(payload))
+// 	if err != nil {
+// 		return x, err
+// 	}
+// 	nr.Close = true
+// 	nr.Header.Set("User-Agent", fmt.Sprintf("com.github.stdutil.http/%s-%s", REQUEST_VERSION, REQUEST_MODIFIED))
+// 	nr.Header.Set("Connection", "keep-alive")
+// 	nr.Header.Set("Accept", "*/*")
+// 	if ct := nr.Header.Get("Content-Type"); ct == "" {
+// 		nr.Header.Set("Content-Type", "application/json")
+// 	}
+// 	if rp.Compressed {
+// 		nr.Header.Set("Accept-Encoding", "gzip, deflate, br")
+// 		switch strings.ToUpper(nr.Method) {
+// 		case "POST", "PUT", "PATCH":
+// 			nr.Header.Add("Content-Encoding", "gzip")
+// 		}
+// 	}
+// 	for k, v := range rp.Headers {
+// 		k = strings.ToLower(k)
+// 		if k != "cookie" {
+// 			nr.Header.Set(k, v)
+// 			continue
+// 		}
+// 		for _, nvs := range strings.Split(v, `;`) {
+// 			if nv := strings.Split(nvs, `=`); len(nv) > 1 {
+// 				nr.AddCookie(&http.Cookie{
+// 					Name:  strings.TrimSpace(nv[0]),
+// 					Value: strings.TrimSpace(nv[1]),
+// 				})
+// 			}
+// 		}
+// 	}
+// 	if rp.TimeOut == 0 {
+// 		rp.TimeOut = 30
+// 	}
+// 	cli := http.Client{
+// 		Timeout:   time.Second * time.Duration(rp.TimeOut),
+// 		Transport: ct,
+// 	}
+// 	resp, err := cli.Do(nr)
+// 	if err != nil {
+// 		return x, err
+// 	}
+// 	defer resp.Body.Close()
+// 	if resp.StatusCode != http.StatusOK {
+// 		return x, fmt.Errorf(resp.Status)
+// 	}
+// 	var (
+// 		data []byte
+// 		xa   any
+// 	)
+
+// 	ce := strings.ToLower(resp.Header.Get("Content-Encoding"))
+// 	if !resp.Uncompressed && ce == "gzip" {
+// 		raw, err := io.ReadAll(resp.Body)
+// 		if err != nil {
+// 			return x, err
+// 		}
+// 		gzr, err := gzip.NewReader(bytes.NewBuffer(raw))
+// 		if err != nil {
+// 			return x, err
+// 		}
+// 		defer gzr.Close()
+// 		for {
+// 			uz := make([]byte, 1024)
+// 			cnt, err := gzr.Read(uz)
+// 			if err != nil {
+// 				if !errors.Is(err, io.ErrUnexpectedEOF) {
+// 					return x, err
+// 				}
+// 				break
+// 			}
+// 			if cnt == 0 {
+// 				break
+// 			}
+// 			data = append(data, uz[0:cnt]...)
+// 		}
+// 		// Except for []bytes, unmarshal
+// 		if reflect.TypeOf(x) == reflect.TypeOf([]byte{}) {
+// 			xa = data
+// 			return xa.(T), err
+// 		}
+// 		err = json.Unmarshal(data, &x)
+// 		if err != nil {
+// 			return x, err
+// 		}
+// 		return x, nil
+// 	}
+
+// 	data, err = io.ReadAll(resp.Body)
+// 	if err != nil {
+// 		if !errors.Is(err, io.ErrUnexpectedEOF) {
+// 			return x, err
+// 		}
+// 	}
+// 	if reflect.TypeOf(x) == reflect.TypeOf([]byte{}) {
+// 		xa = data
+// 		return xa.(T), err
+// 	}
+// 	err = json.Unmarshal(data, &x)
+// 	if err != nil {
+// 		return x, err
+// 	}
+// 	return x, nil
+// }
+
+// ExecuteApi (ChatGPT optimized) wraps http operation that change or read data and returns a byte array.
+//
+// On headers:
+//   - Content-Type: If this header is not set, it defaults to "application/json"
+//   - Content-Encoding: If compressed is true, it is set to "gzip"
+func ExecuteApi[T any](method, endPoint string, payload []byte, opts ...RequestOption) (T, error) {
 	var x T
 
+	// Apply options
 	rp := RequestParam{}
 	for _, o := range opts {
-		if o == nil {
-			continue
+		if o != nil {
+			o(&rp)
 		}
-		o(&rp)
 	}
 
-	nr, err := http.NewRequest(method, endPoint, bytes.NewBuffer(payload))
+	// Create request
+	req, err := http.NewRequest(method, endPoint, bytes.NewBuffer(payload))
 	if err != nil {
 		return x, err
 	}
-	nr.Close = true
-	nr.Header.Set("User-Agent", fmt.Sprintf("com.github.stdutil.http/%s-%s", REQUEST_VERSION, REQUEST_MODIFIED))
-	nr.Header.Set("Connection", "keep-alive")
-	nr.Header.Set("Accept", "*/*")
-	if ct := nr.Header.Get("Content-Type"); ct == "" {
-		nr.Header.Set("Content-Type", "application/json")
+
+	// Default headers
+	req.Header.Set("User-Agent", fmt.Sprintf("com.github.stdutil.http/%s-%s", REQUEST_VERSION, REQUEST_MODIFIED))
+	req.Header.Set("Connection", "keep-alive")
+	req.Header.Set("Accept", "*/*")
+	if req.Header.Get("Content-Type") == "" {
+		req.Header.Set("Content-Type", "application/json")
 	}
+
+	// Compression headers
 	if rp.Compressed {
-		nr.Header.Set("Accept-Encoding", "gzip, deflate, br")
-		switch strings.ToUpper(nr.Method) {
-		case "POST", "PUT", "PATCH":
-			nr.Header.Add("Content-Encoding", "gzip")
+		req.Header.Set("Accept-Encoding", "gzip, deflate, br")
+		if method == http.MethodPost || method == http.MethodPut || method == http.MethodPatch {
+			req.Header.Set("Content-Encoding", "gzip")
 		}
 	}
+
+	// Apply custom headers and cookies
 	for k, v := range rp.Headers {
-		k = strings.ToLower(k)
-		if k != "cookie" {
-			nr.Header.Set(k, v)
-			continue
-		}
-		for _, nvs := range strings.Split(v, `;`) {
-			if nv := strings.Split(nvs, `=`); len(nv) > 1 {
-				nr.AddCookie(&http.Cookie{
-					Name:  strings.TrimSpace(nv[0]),
-					Value: strings.TrimSpace(nv[1]),
-				})
+		if strings.EqualFold(k, "cookie") {
+			for _, pair := range strings.Split(v, ";") {
+				nv := strings.SplitN(pair, "=", 2)
+				if len(nv) == 2 {
+					req.AddCookie(&http.Cookie{
+						Name:  strings.TrimSpace(nv[0]),
+						Value: strings.TrimSpace(nv[1]),
+					})
+				}
 			}
+		} else {
+			req.Header.Set(k, v)
 		}
 	}
-	if rp.TimeOut == 0 {
-		rp.TimeOut = 30
+
+	// HTTP client
+	client := http.Client{
+		Timeout: time.Second * time.Duration(rp.TimeOut),
 	}
-	cli := http.Client{
-		Timeout:   time.Second * time.Duration(rp.TimeOut),
-		Transport: ct,
-	}
-	resp, err := cli.Do(nr)
+	resp, err := client.Do(req)
 	if err != nil {
 		return x, err
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return x, fmt.Errorf(resp.Status)
-	}
-	var (
-		data []byte
-		xa   any
-	)
 
-	ce := strings.ToLower(resp.Header.Get("Content-Encoding"))
-	if !resp.Uncompressed && ce == "gzip" {
-		raw, err := io.ReadAll(resp.Body)
-		if err != nil {
-			return x, err
-		}
-		gzr, err := gzip.NewReader(bytes.NewBuffer(raw))
+	// Check HTTP status code
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		return x, fmt.Errorf("HTTP error: %d %s", resp.StatusCode, http.StatusText(resp.StatusCode))
+	}
+
+	// Decode response body
+	var body []byte
+	switch strings.ToLower(resp.Header.Get("Content-Encoding")) {
+	case "gzip":
+		gzr, err := gzip.NewReader(resp.Body)
 		if err != nil {
 			return x, err
 		}
 		defer gzr.Close()
-		for {
-			uz := make([]byte, 1024)
-			cnt, err := gzr.Read(uz)
-			if err != nil {
-				if !errors.Is(err, io.ErrUnexpectedEOF) {
-					return x, err
-				}
-				break
-			}
-			if cnt == 0 {
-				break
-			}
-			data = append(data, uz[0:cnt]...)
-		}
-		// Except for []bytes, unmarshal
-		if reflect.TypeOf(x) == reflect.TypeOf([]byte{}) {
-			xa = data
-			return xa.(T), err
-		}
-		err = json.Unmarshal(data, &x)
-		if err != nil {
-			return x, err
-		}
-		return x, nil
+		body, err = io.ReadAll(gzr)
+	default:
+		body, err = io.ReadAll(resp.Body)
 	}
-
-	data, err = io.ReadAll(resp.Body)
-	if err != nil {
-		if !errors.Is(err, io.ErrUnexpectedEOF) {
-			return x, err
-		}
-	}
-	if reflect.TypeOf(x) == reflect.TypeOf([]byte{}) {
-		xa = data
-		return xa.(T), err
-	}
-	err = json.Unmarshal(data, &x)
 	if err != nil {
 		return x, err
 	}
-	return x, nil
+
+	// Type-specific return
+	switch any(x).(type) {
+	case []byte:
+		return any(body).(T), nil
+	default:
+		err = json.Unmarshal(body, &x)
+		return x, err
+	}
 }
 
 // ExecuteJsonApi wraps http operation that change or read data and returns a custom result
