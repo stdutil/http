@@ -265,15 +265,30 @@ func ExecuteApi[T any](method, endPoint string, payload []byte, opts ...RequestO
 	// Decode response body
 	var body []byte
 	ce := strings.ToLower(resp.Header.Get("Content-Encoding"))
-	if ce == "gzip" {
-		gzr, err := gzip.NewReader(resp.Body)
+	if !resp.Uncompressed && ce == "gzip" {
+		raw, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return x, err
+		}
+		gzr, err := gzip.NewReader(bytes.NewBuffer(raw))
 		if err != nil {
 			return x, err
 		}
 		defer gzr.Close()
-		body, err = io.ReadAll(gzr)
-		if err != nil {
-			return x, err
+		body = make([]byte, 0, len(raw))
+		for {
+			uz := make([]byte, 1024)
+			cnt, err := gzr.Read(uz)
+			if err != nil {
+				if !errors.Is(err, io.ErrUnexpectedEOF) {
+					return x, err
+				}
+				break
+			}
+			if cnt == 0 {
+				break
+			}
+			body = append(body, uz[0:cnt]...)
 		}
 	} else {
 		body, err = io.ReadAll(resp.Body)
@@ -283,7 +298,6 @@ func ExecuteApi[T any](method, endPoint string, payload []byte, opts ...RequestO
 	}
 
 	// Type-specific return
-
 	switch any(x).(type) {
 	case []byte:
 		return any(body).(T), nil
