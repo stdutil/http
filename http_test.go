@@ -2,8 +2,11 @@ package http
 
 import (
 	"fmt"
+	"net/http"
 	"sync"
 	"testing"
+
+	"github.com/go-chi/chi/v5"
 )
 
 type Place struct {
@@ -29,6 +32,62 @@ func TestParsePath(t *testing.T) {
 
 	paths, id = ParsePath("/acct/Auth/ss", true, true)
 	t.Log(paths, id)
+}
+
+func TestRoutePath(t *testing.T) {
+	r := chi.NewRouter()
+	r.HandleFunc("/route/handle/",
+		func(w http.ResponseWriter, r *http.Request) {
+			paths, id := ParseRouteVars(r, false)
+			_ = paths
+			_ = id
+			w.Write([]byte("Hello, forward slashed!"))
+		})
+	r.HandleFunc("/route/handle/key",
+		func(w http.ResponseWriter, r *http.Request) {
+			paths, id := ParseRouteVars(r, false)
+			_ = paths
+			_ = id
+			w.Write([]byte("Hello, expected key!"))
+		})
+	r.HandleFunc("/route/{handlex}",
+		func(w http.ResponseWriter, r *http.Request) {
+			paths, id := ParseRouteVars(r, false)
+			_ = paths
+			_ = id
+			w.Write([]byte("Hello, route with no forward slash"))
+		})
+
+	obj := func() http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			paths, id := ParseRouteVars(r, false)
+			_ = paths
+			_ = id
+			w.Write([]byte("Hello, route with no forward slash"))
+		})
+	}
+	r.Handle("/route/german/*", obj())
+
+	go func() {
+		httpServer := &http.Server{
+			Addr:    ":8080",
+			Handler: r,
+		}
+		httpServer.ListenAndServe()
+	}()
+
+	data, err := ExecuteApi[string](
+		"GET",
+		"http://localhost:8080/route/german/handlex", nil,
+		Headers(map[string]string{
+			"Content-Type": "plain/text",
+		}))
+	if err != nil {
+		t.Log(err)
+		t.Fail()
+		return
+	}
+	t.Log(data)
 }
 
 func TestReadAPI(t *testing.T) {

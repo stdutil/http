@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"encoding/json"
+	"encoding/xml"
 	"errors"
 	"fmt"
 	"io"
@@ -210,6 +211,13 @@ func ExecuteApi[T any](method, endPoint string, payload []byte, opts ...RequestO
 	req.Header.Set("User-Agent", fmt.Sprintf("com.github.stdutil.http/%s-%s", REQUEST_VERSION, REQUEST_MODIFIED))
 	req.Header.Set("Connection", "keep-alive")
 	req.Header.Set("Accept", "*/*")
+
+	for k, v := range rp.Headers {
+		if k == "" || v == "" {
+			continue
+		}
+		req.Header.Set(k, v)
+	}
 	if req.Header.Get("Content-Type") == "" {
 		req.Header.Set("Content-Type", "application/json")
 	}
@@ -256,28 +264,43 @@ func ExecuteApi[T any](method, endPoint string, payload []byte, opts ...RequestO
 
 	// Decode response body
 	var body []byte
-	switch strings.ToLower(resp.Header.Get("Content-Encoding")) {
-	case "gzip":
+	ce := strings.ToLower(resp.Header.Get("Content-Encoding"))
+	if ce == "gzip" {
 		gzr, err := gzip.NewReader(resp.Body)
 		if err != nil {
 			return x, err
 		}
 		defer gzr.Close()
 		body, err = io.ReadAll(gzr)
-	default:
+		if err != nil {
+			return x, err
+		}
+	} else {
 		body, err = io.ReadAll(resp.Body)
-	}
-	if err != nil {
-		return x, err
+		if err != nil {
+			return x, err
+		}
 	}
 
 	// Type-specific return
+
 	switch any(x).(type) {
 	case []byte:
 		return any(body).(T), nil
 	default:
-		err = json.Unmarshal(body, &x)
-		return x, err
+		switch strings.ToLower(req.Header.Get("Content-Type")) {
+		case "application/json":
+			err = json.Unmarshal(body, &x)
+			return x, err
+		case "text/xml":
+			err = xml.Unmarshal(body, &x)
+			return x, err
+		case "plain/text":
+			str, _ := any(string(body)).(T)
+			return str, err
+		}
+		str, _ := any(body).(T)
+		return str, nil
 	}
 }
 
@@ -451,12 +474,11 @@ func ParseQueryString(qs *string) nv.NameValues {
 func ParsePath(urlPath string, normalizePathCase, inclSlashPfx bool) ([]string, string) {
 
 	var (
-		ptn,
-		id,
+		ptn, id,
 		slashPfx string
-		paths            []string
-		hasTrailingSlash bool
+		hasTrlngSlsh bool
 	)
+	paths := make([]string, 0, 7)
 
 	if urlPath == "" {
 		return paths, id
@@ -470,16 +492,18 @@ func ParsePath(urlPath string, normalizePathCase, inclSlashPfx bool) ([]string, 
 
 	ptn = urlPath
 	if ptn != "" {
-		hasTrailingSlash = ptn[len(ptn)-1:] == `/`
+		hasTrlngSlsh = ptn[len(ptn)-1:] == `/`
 	}
 
 	if inclSlashPfx {
 		slashPfx = "/"
 	}
 
-	rawPath := strings.FieldsFunc(ptn, func(c rune) bool {
-		return c == '/'
-	})
+	rawPath := strings.FieldsFunc(
+		ptn,
+		func(c rune) bool {
+			return c == '/'
+		})
 	pathlen := len(rawPath)
 	if pathlen == 0 {
 		return paths, id
@@ -489,7 +513,7 @@ func ParsePath(urlPath string, normalizePathCase, inclSlashPfx bool) ([]string, 
 	// But if the path is not a number, it might be a command
 	if pathlen == 1 {
 		if pth := rawPath[0]; len(pth) > 0 {
-			if hasTrailingSlash {
+			if hasTrlngSlsh {
 				if normalizePathCase {
 					pth = strings.ToLower(pth)
 				}
@@ -514,7 +538,7 @@ func ParsePath(urlPath string, normalizePathCase, inclSlashPfx bool) ([]string, 
 			}
 		}
 		if pth := rawPath[pathlen-1]; len(pth) > 0 {
-			if hasTrailingSlash {
+			if hasTrlngSlsh {
 				if normalizePathCase {
 					pth = strings.ToLower(pth)
 				}
@@ -571,8 +595,22 @@ func ParseJwt(token, secretKey string, validateTimes bool) (*JWTInfo, error) {
 
 // ParseRouteVars parses custom routes from a route handler
 func ParseRouteVars(r *http.Request, preserveCmdCase bool) ([]string, string) {
+	up := r.URL.Path
+
+	// Sanitize the pattern built by chi.
+	// A path should be distinguished apart from the id or key
 	pt := strings.TrimSuffix(chi.RouteContext(r.Context()).RoutePattern(), "*")
-	ptn := strings.Replace(r.URL.Path, pt, "", -1) // Trim the url by URL path. The remaining text will be the path to evaluate
+	if strings.HasSuffix(up, "/") && !strings.HasSuffix(pt, "/") {
+		pt += "/"
+	}
+
+	// Trim the url by URL path.
+	// The remaining text will be the path to evaluate
+	ptn := strings.Replace(r.URL.Path, pt, "", -1)
+
+	// ParsePath expects paths enclosed in forward slashes.
+	// This requirement allows ParsePath to identify which is
+	// a path and an id (key).
 	return ParsePath(ptn, !preserveCmdCase, false)
 }
 
