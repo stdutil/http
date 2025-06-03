@@ -6,7 +6,7 @@ require (
 	github.com/gbrlsnchs/jwt/v3 v3.0.1
 	github.com/stdutil/log v0.0.0-20241115150827-18730e91d3ec
 	github.com/stdutil/name-value v0.0.0-20250203071454-6cef1591014b
-	github.com/stdutil/result v0.0.0-20250511025916-c346b9f8406a
+	github.com/stdutil/result v0.0.0-20250603074032-9db357f0af43
 )
 
 require (
