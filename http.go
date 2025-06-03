@@ -249,7 +249,8 @@ func ExecuteApi[T any](method, endPoint string, payload []byte, opts ...RequestO
 
 	// HTTP client
 	client := http.Client{
-		Timeout: time.Second * time.Duration(rp.TimeOut),
+		Timeout:   time.Second * time.Duration(rp.TimeOut),
+		Transport: ct,
 	}
 	resp, err := client.Do(req)
 	if err != nil {
@@ -293,7 +294,10 @@ func ExecuteApi[T any](method, endPoint string, payload []byte, opts ...RequestO
 	} else {
 		body, err = io.ReadAll(resp.Body)
 		if err != nil {
-			return x, err
+			// if !errors.Is(err, io.ErrUnexpectedEOF) {
+			// 	return x, err
+			// }
+			return x, fmt.Errorf("read failed: %w", err)
 		}
 	}
 
