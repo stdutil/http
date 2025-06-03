@@ -294,10 +294,9 @@ func ExecuteApi[T any](method, endPoint string, payload []byte, opts ...RequestO
 	} else {
 		body, err = io.ReadAll(resp.Body)
 		if err != nil {
-			// if !errors.Is(err, io.ErrUnexpectedEOF) {
-			// 	return x, err
-			// }
-			return x, fmt.Errorf("read failed: %w", err)
+			if !errors.Is(err, io.ErrUnexpectedEOF) {
+				return x, fmt.Errorf("read failed: %w", err)
+			}
 		}
 	}
 
