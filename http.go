@@ -765,14 +765,14 @@ func getBody(r *http.Request, isMultiPart *bool) []byte {
 		furlenc string = "application/x-www-form-urlencoded"
 	)
 	if cType := strings.Split(r.Header.Get("Content-Type"), ";"); len(cType) > 0 {
-		c1 = strings.TrimSpace(cType[0])
+		c1 = strings.ToLower(strings.TrimSpace(cType[0]))
 	}
 	method := strings.ToUpper(r.Method)
 	if isMultiPart == nil {
 		isMultiPart = new(bool)
 	}
-	*isMultiPart = c1 != mulpart
-	if useBody := (c1 != furlenc && c1 != mulpart) && (method == "POST" || method == "PUT" || method == "DELETE"); useBody {
+	*isMultiPart = c1 == mulpart
+	if useBody := (c1 != furlenc && !*isMultiPart) && (method == "POST" || method == "PUT" || method == "DELETE"); useBody {
 		// We are receiving body as bytes to Unmarshall later depending on the type
 		b := func() []byte {
 			if r.Body != nil {
