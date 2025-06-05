@@ -260,7 +260,12 @@ func ExecuteApi[T any](method, endPoint string, payload []byte, opts ...RequestO
 
 	// Check HTTP status code
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		return x, fmt.Errorf("HTTP error: %d %s", resp.StatusCode, http.StatusText(resp.StatusCode))
+		return x,
+			fmt.Errorf("HTTP error: %d %s (Requesting resource at %s)",
+				resp.StatusCode,
+				http.StatusText(resp.StatusCode),
+				endPoint,
+			)
 	}
 
 	// Decode response body
