@@ -254,7 +254,7 @@ func ExecuteApi[T any](method, endPoint string, payload []byte, opts ...RequestO
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return x, err
+		return x, fmt.Errorf("%w: Requesting resource at %s", err, endPoint)
 	}
 	defer resp.Body.Close()
 
