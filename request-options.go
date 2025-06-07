@@ -5,9 +5,10 @@ import "maps"
 type (
 	// RequestParam for <REST verb>Api request functions
 	RequestParam struct {
-		TimeOut    int               // Request time out
-		Compressed bool              // Compressed
-		Headers    map[string]string // Headers for the request
+		TimeOut    int                  // Request time out
+		Compressed bool                 // Compressed
+		Headers    map[string]string    // Headers for the request
+		LogFunc    func(string, ...any) // Log function
 	}
 	// RequestOption for <REST verb>Api request functions
 	RequestOption func(opt *RequestParam) error
@@ -42,6 +43,16 @@ func Headers(hdr map[string]string) RequestOption {
 			rp.Headers = make(map[string]string)
 		}
 		maps.Copy(rp.Headers, hdr)
+		return nil
+	}
+}
+
+// Log sets the log function that executes on ExecuteAPI calls
+//
+// This is used with <REST verb>Api functions
+func Log(f func(string, ...any)) RequestOption {
+	return func(rp *RequestParam) error {
+		rp.LogFunc = f
 		return nil
 	}
 }

@@ -28,8 +28,9 @@ const (
 )
 
 var (
-	rto int // Request timeout in seconds
-	ct  *http.Transport
+	rto     int // Request timeout in seconds
+	ct      *http.Transport
+	logFunc func(string, ...any)
 )
 
 var (
@@ -60,6 +61,7 @@ func init() {
 	ct.MaxIdleConns = 100
 	ct.MaxConnsPerHost = 100
 	ct.MaxIdleConnsPerHost = 100
+	logFunc = func(s string, a ...any) {} // set to black hole function
 }
 
 // ExecuteApi wraps http operation that change or read data and returns a byte array
@@ -201,9 +203,14 @@ func ExecuteApi[T any](method, endPoint string, payload []byte, opts ...RequestO
 		}
 	}
 
+	// Overrides the default log function
+	// or previously set function
+	logFunc = rp.LogFunc
+
 	// Create request
 	req, err := http.NewRequest(method, endPoint, bytes.NewBuffer(payload))
 	if err != nil {
+		logFunc("%s: %s %s - %w", string(log.Error), method, endPoint, err)
 		return x, err
 	}
 
@@ -254,18 +261,21 @@ func ExecuteApi[T any](method, endPoint string, payload []byte, opts ...RequestO
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return x, fmt.Errorf("%w: Requesting resource at %s", err, endPoint)
+		err = fmt.Errorf("%w: Requesting resource at %s", err, endPoint)
+		logFunc("%s: %s %s - %w", string(log.Error), method, endPoint, err)
+		return x, err
 	}
 	defer resp.Body.Close()
 
 	// Check HTTP status code
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		return x,
-			fmt.Errorf("HTTP error: %d %s (Requesting resource at %s)",
-				resp.StatusCode,
-				http.StatusText(resp.StatusCode),
-				endPoint,
-			)
+		err = fmt.Errorf("HTTP error: %d %s (Requesting resource at %s)",
+			resp.StatusCode,
+			http.StatusText(resp.StatusCode),
+			endPoint,
+		)
+		logFunc("%s: %s %s - %w", string(log.Error), method, endPoint, err)
+		return x, err
 	}
 
 	// Decode response body
@@ -274,10 +284,12 @@ func ExecuteApi[T any](method, endPoint string, payload []byte, opts ...RequestO
 	if !resp.Uncompressed && ce == "gzip" {
 		raw, err := io.ReadAll(resp.Body)
 		if err != nil {
+			logFunc("%s: %s %s - %w", string(log.Error), method, endPoint, err)
 			return x, err
 		}
 		gzr, err := gzip.NewReader(bytes.NewBuffer(raw))
 		if err != nil {
+			logFunc("%s: %s %s - %w", string(log.Error), method, endPoint, err)
 			return x, err
 		}
 		defer gzr.Close()
@@ -287,6 +299,7 @@ func ExecuteApi[T any](method, endPoint string, payload []byte, opts ...RequestO
 			cnt, err := gzr.Read(uz)
 			if err != nil {
 				if !errors.Is(err, io.ErrUnexpectedEOF) {
+					logFunc("%s: %s %s - %w", string(log.Error), method, endPoint, err)
 					return x, err
 				}
 				break
@@ -300,6 +313,7 @@ func ExecuteApi[T any](method, endPoint string, payload []byte, opts ...RequestO
 		body, err = io.ReadAll(resp.Body)
 		if err != nil {
 			if !errors.Is(err, io.ErrUnexpectedEOF) {
+				logFunc("%s: %s %s - %w", string(log.Error), method, endPoint, err)
 				return x, fmt.Errorf("read failed: %w", err)
 			}
 		}
@@ -313,9 +327,15 @@ func ExecuteApi[T any](method, endPoint string, payload []byte, opts ...RequestO
 		switch strings.ToLower(req.Header.Get("Content-Type")) {
 		case "application/json":
 			err = json.Unmarshal(body, &x)
+			if err != nil {
+				logFunc("%s: %s %s - %w", string(log.Error), method, endPoint, err)
+			}
 			return x, err
 		case "text/xml":
 			err = xml.Unmarshal(body, &x)
+			if err != nil {
+				logFunc("%s: %s %s - %w", string(log.Error), method, endPoint, err)
+			}
 			return x, err
 		case "plain/text":
 			str, _ := any(string(body)).(T)
@@ -634,6 +654,11 @@ func ParseRouteVars(r *http.Request, preserveCmdCase bool) ([]string, string) {
 	// This requirement allows ParsePath to identify which is
 	// a path and an id (key).
 	return ParsePath(ptn, !preserveCmdCase, false)
+}
+
+// SetLog sets a log function to ExecuteAPI calls
+func SetLog(f func(string, ...any)) {
+	logFunc = f
 }
 
 // SetRequestTimeOut sets the new timeout value
