@@ -210,7 +210,7 @@ func ExecuteApi[T any](method, endPoint string, payload []byte, opts ...RequestO
 	// Create request
 	req, err := http.NewRequest(method, endPoint, bytes.NewBuffer(payload))
 	if err != nil {
-		logFunc("%s: %s %s - %w", string(log.Error), method, endPoint, err)
+		logFunc("%s: %s %s - %s", string(log.Error), method, endPoint, err)
 		return x, err
 	}
 
@@ -261,8 +261,8 @@ func ExecuteApi[T any](method, endPoint string, payload []byte, opts ...RequestO
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		err = fmt.Errorf("%w: Requesting resource at %s", err, endPoint)
-		logFunc("%s: %s %s - %w", string(log.Error), method, endPoint, err)
+		err = fmt.Errorf("%s: Requesting resource at %s", err, endPoint)
+		logFunc("%s: %s %s - %s", string(log.Error), method, endPoint, err)
 		return x, err
 	}
 	defer resp.Body.Close()
@@ -274,7 +274,7 @@ func ExecuteApi[T any](method, endPoint string, payload []byte, opts ...RequestO
 			http.StatusText(resp.StatusCode),
 			endPoint,
 		)
-		logFunc("%s: %s %s - %w", string(log.Error), method, endPoint, err)
+		logFunc("%s: %s %s - %s", string(log.Error), method, endPoint, err)
 		return x, err
 	}
 
@@ -284,13 +284,13 @@ func ExecuteApi[T any](method, endPoint string, payload []byte, opts ...RequestO
 	if !resp.Uncompressed && ce == "gzip" {
 		raw, err := io.ReadAll(resp.Body)
 		if err != nil {
-			logFunc("%s: %s %s - %w", string(log.Error), method, endPoint, err)
-			return x, err
+			logFunc("%s: %s %s - %s", string(log.Error), method, endPoint, err)
+			return x, fmt.Errorf("read failed: %w", err)
 		}
 		gzr, err := gzip.NewReader(bytes.NewBuffer(raw))
 		if err != nil {
-			logFunc("%s: %s %s - %w", string(log.Error), method, endPoint, err)
-			return x, err
+			logFunc("%s: %s %s - %s", string(log.Error), method, endPoint, err)
+			return x, fmt.Errorf("read failed: %w", err)
 		}
 		defer gzr.Close()
 		body = make([]byte, 0, len(raw))
@@ -299,8 +299,8 @@ func ExecuteApi[T any](method, endPoint string, payload []byte, opts ...RequestO
 			cnt, err := gzr.Read(uz)
 			if err != nil {
 				if !errors.Is(err, io.ErrUnexpectedEOF) {
-					logFunc("%s: %s %s - %w", string(log.Error), method, endPoint, err)
-					return x, err
+					logFunc("%s: %s %s - %s", string(log.Error), method, endPoint, err)
+					return x, fmt.Errorf("read failed: %w", err)
 				}
 				break
 			}
@@ -313,7 +313,7 @@ func ExecuteApi[T any](method, endPoint string, payload []byte, opts ...RequestO
 		body, err = io.ReadAll(resp.Body)
 		if err != nil {
 			if !errors.Is(err, io.ErrUnexpectedEOF) {
-				logFunc("%s: %s %s - %w", string(log.Error), method, endPoint, err)
+				logFunc("%s: %s %s - %s", string(log.Error), method, endPoint, err)
 				return x, fmt.Errorf("read failed: %w", err)
 			}
 		}
@@ -328,13 +328,13 @@ func ExecuteApi[T any](method, endPoint string, payload []byte, opts ...RequestO
 		case "application/json":
 			err = json.Unmarshal(body, &x)
 			if err != nil {
-				logFunc("%s: %s %s - %w", string(log.Error), method, endPoint, err)
+				logFunc("%s: %s %s - %s", string(log.Error), method, endPoint, err)
 			}
 			return x, err
 		case "text/xml":
 			err = xml.Unmarshal(body, &x)
 			if err != nil {
-				logFunc("%s: %s %s - %w", string(log.Error), method, endPoint, err)
+				logFunc("%s: %s %s - %s", string(log.Error), method, endPoint, err)
 			}
 			return x, err
 		case "plain/text":
