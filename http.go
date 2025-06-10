@@ -603,6 +603,11 @@ func ParseJwt(token, secretKey string, validateTimes bool) (*JWTInfo, error) {
 		err error
 	)
 
+	skl := len(secretKey)
+	if skl < 32 {
+		secretKey += strings.Repeat("1", 32-skl)
+	}
+
 	// Parse JWT
 	HMAC := jwt.NewHS256([]byte(secretKey))
 
@@ -667,16 +672,16 @@ func SetRequestTimeout(timeOut int) {
 }
 
 // SignJwt builds a JWT token using HMAC256 algorithm
-func SignJwt(claims *map[string]interface{}, secretKey string) string {
+func SignJwt(claims *map[string]any, secretKey string) string {
 	clm := *claims
 	var (
 		usr, dom, app, dev string
 		iss, sub, jti, tnt string
-		exp, nbf, iat      int64
+		exp, nbf, iat      int
 	)
 
 	aud := jwt.Audience{}
-	var ifc interface{}
+	var ifc any
 	if ifc = clm["iss"]; ifc != nil {
 		iss = ifc.(string)
 	}
@@ -700,13 +705,13 @@ func SignJwt(claims *map[string]interface{}, secretKey string) string {
 		}
 	}
 	if ifc = clm["exp"]; ifc != nil {
-		exp = ifc.(int64)
+		exp = ifc.(int)
 	}
 	if ifc = clm["nbf"]; ifc != nil {
-		nbf = ifc.(int64)
+		nbf = ifc.(int)
 	}
 	if ifc = clm["iat"]; ifc != nil {
-		iat = ifc.(int64)
+		iat = ifc.(int)
 	}
 	if ifc = clm["usr"]; ifc != nil {
 		usr = ifc.(string)
@@ -741,9 +746,9 @@ func SignJwt(claims *map[string]interface{}, secretKey string) string {
 			Issuer:         iss,
 			Subject:        sub,
 			Audience:       aud,
-			ExpirationTime: unixt(exp),
-			NotBefore:      unixt(nbf),
-			IssuedAt:       unixt(iat),
+			ExpirationTime: unixt(int64(exp)),
+			NotBefore:      unixt(int64(nbf)),
+			IssuedAt:       unixt(int64(iat)),
 			JWTID:          jti,
 		},
 		UserName:      usr,
@@ -751,6 +756,11 @@ func SignJwt(claims *map[string]interface{}, secretKey string) string {
 		ApplicationID: app,
 		DeviceID:      dev,
 		TenantID:      tnt,
+	}
+
+	skl := len(secretKey)
+	if skl < 32 {
+		secretKey += strings.Repeat("1", 32-skl)
 	}
 
 	HMAC := jwt.NewHS256([]byte(secretKey))

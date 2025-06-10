@@ -34,6 +34,29 @@ func TestParsePath(t *testing.T) {
 	t.Log(paths, id)
 }
 
+func TestSignJwt(t *testing.T) {
+	sign := SignJwt(&map[string]any{
+		"aud": "APPCORE-AUTH",
+		"exp": 0,
+		"nbf": 1749540992,
+		"iat": 0,
+		"usr": "zaldy.baguinon",
+		"dom": "MDCI",
+		"app": "APPCORE-AUTH",
+		"dev": "2v4R2BQowqz6ogkSwaWfp1kWTkL",
+	}, "2oVZvzSWzqNg6aogdTTUE2Kz0Mu")
+	t.Log(sign)
+}
+
+func TestParseJwt(t *testing.T) {
+	jwt, err := ParseJwt("eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhdWQiOiJBUFBDT1JFLUFVVEgiLCJleHAiOjAsIm5iZiI6MTc0OTU0MDk5MiwiaWF0IjowLCJ1c3IiOiJ6YWxkeS5iYWd1aW5vbiIsImRvbSI6Ik1EQ0kiLCJhcHAiOiJBUFBDT1JFLUFVVEgiLCJkZXYiOiIydjRSMkJRb3dxejZvZ2tTd2FXZnAxa1dUa0wifQ.vB7-ILdM-7YElcWGGvIOJOEhfcoQwehT733EkoJui2A", "2oVZvzSWzqNg6aogdTTUE2Kz0Mu", false)
+	if err != nil {
+		t.Log(err)
+		t.Fail()
+	}
+	t.Log(jwt.Valid)
+}
+
 func TestRoutePath(t *testing.T) {
 	r := chi.NewRouter()
 	r.HandleFunc("/route/handle/",
