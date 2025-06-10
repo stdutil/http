@@ -205,7 +205,9 @@ func ExecuteApi[T any](method, endPoint string, payload []byte, opts ...RequestO
 
 	// Overrides the default log function
 	// or previously set function
-	logFunc = rp.LogFunc
+	if rp.LogFunc != nil {
+		logFunc = rp.LogFunc
+	}
 
 	// Create request
 	req, err := http.NewRequest(method, endPoint, bytes.NewBuffer(payload))
