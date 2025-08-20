@@ -46,6 +46,12 @@ func TestSignJwt(t *testing.T) {
 		"dev": "2v4R2BQowqz6ogkSwaWfp1kWTkL",
 	}, "2oVZvzSWzqNg6aogdTTUE2Kz0Mu")
 	t.Log(sign)
+	jwt, err := ParseJwt(sign, "2oVZvzSWzqNg6aogdTTUE2Kz0Mu", false)
+	if err != nil {
+		t.Log(err)
+		t.Fail()
+	}
+	t.Log(jwt.Valid)
 }
 
 func TestParseJwt(t *testing.T) {
