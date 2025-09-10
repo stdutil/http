@@ -326,7 +326,11 @@ func ExecuteApi[T any](method, endPoint string, payload []byte, opts ...RequestO
 	case []byte:
 		return any(body).(T), nil
 	default:
-		switch strings.ToLower(req.Header.Get("Content-Type")) {
+		ct := strings.ToLower(req.Header.Get("Content-Type"))
+		if rp.AssumedContentType != "" {
+			ct = rp.AssumedContentType
+		}
+		switch ct {
 		case "application/json":
 			err = json.Unmarshal(body, &x)
 			if err != nil {
