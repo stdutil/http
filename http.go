@@ -305,7 +305,6 @@ func ExecuteApi[T any](method, endPoint string, payload []byte, opts ...RequestO
 					logFunc("%s: %s %s - %s", string(log.Error), method, endPoint, err)
 					return x, fmt.Errorf("read failed: %w", err)
 				}
-				break
 			}
 			if cnt == 0 {
 				break
