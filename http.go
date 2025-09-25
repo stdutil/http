@@ -25,6 +25,7 @@ import (
 const (
 	REQUEST_VERSION  string = "1.1.0.0"
 	REQUEST_MODIFIED string = "24052025"
+	MAX_BUFFER       int    = 1024
 )
 
 var (
@@ -242,7 +243,7 @@ func ExecuteApi[T any](method, endPoint string, payload []byte, opts ...RequestO
 	// Apply custom headers and cookies
 	for k, v := range rp.Headers {
 		if strings.EqualFold(k, "cookie") {
-			for _, pair := range strings.Split(v, ";") {
+			for pair := range strings.SplitSeq(v, ";") {
 				nv := strings.SplitN(pair, "=", 2)
 				if len(nv) == 2 {
 					req.AddCookie(&http.Cookie{
@@ -297,10 +298,10 @@ func ExecuteApi[T any](method, endPoint string, payload []byte, opts ...RequestO
 		defer gzr.Close()
 		body = make([]byte, 0, len(raw))
 		for {
-			uz := make([]byte, 1024)
+			uz := make([]byte, MAX_BUFFER)
 			cnt, err := gzr.Read(uz)
 			if err != nil {
-				if !errors.Is(err, io.ErrUnexpectedEOF) {
+				if !(errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, io.EOF)) {
 					logFunc("%s: %s %s - %s", string(log.Error), method, endPoint, err)
 					return x, fmt.Errorf("read failed: %w", err)
 				}
@@ -314,7 +315,7 @@ func ExecuteApi[T any](method, endPoint string, payload []byte, opts ...RequestO
 	} else {
 		body, err = io.ReadAll(resp.Body)
 		if err != nil {
-			if !errors.Is(err, io.ErrUnexpectedEOF) {
+			if !(errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, io.EOF)) {
 				logFunc("%s: %s %s - %s", string(log.Error), method, endPoint, err)
 				return x, fmt.Errorf("read failed: %w", err)
 			}
@@ -362,18 +363,6 @@ func ExecuteJsonApi(method string, endPoint string, payload []byte, opts ...Requ
 		rd.Result.AddErr(err)
 		return
 	}
-	// if len(data) == 0 {
-	// 	return
-	// }
-
-	// // Create a temporary result data for unmarshalling purposes
-	// // The internal Log field is not populated when unmarshalling
-	// trd := ResultData{}
-	// if err = json.Unmarshal(data, &trd); err != nil {
-	// 	rd.Result.AddErr(err)
-	// 	rd.Data = data // This is not marshable to resultdata, we'll try to send the real result
-	// 	return
-	// }
 
 	// Assign temp to result
 	rd.Data = trd.Data
@@ -403,15 +392,15 @@ func ExecuteJsonApi(method string, endPoint string, payload []byte, opts ...Requ
 		}
 		switch msgType {
 		case string(log.Warn):
-			rd.Result.AddWarning(msg)
+			rd.Result.AddWarning("%s", msg)
 		case string(log.Error):
-			rd.Result.AddError(msg)
+			rd.Result.AddError("%s", msg)
 		case string(log.Fatal):
-			rd.Result.AddError(msg)
+			rd.Result.AddError("%s", msg)
 		case string(log.Success):
-			rd.Result.AddSuccess(msg)
+			rd.Result.AddSuccess("%s", msg)
 		case string(log.App):
-			rd.Result.AddRawMsg(msg)
+			rd.Result.AddRawMsg("%s", msg)
 		}
 	}
 
