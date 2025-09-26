@@ -634,6 +634,51 @@ func ParseJwt(token, secretKey string, validateTimes bool) (*JWTInfo, error) {
 	}, nil
 }
 
+// ParseJwtPayload validates, parses JWT and returns CustomPayload information using HMAC256 algorithm
+func ParseJwtPayload(token, secretKey string, validateTimes bool) (*CustomPayload, error) {
+	if len(secretKey) == 0 {
+		return nil, fmt.Errorf(`secret key not set`)
+	}
+	skl := len(secretKey)
+	if skl < 32 {
+		secretKey += strings.Repeat("1", 32-skl)
+	}
+
+	// Parse JWT
+	HMAC := jwt.NewHS256([]byte(secretKey))
+
+	var (
+		pl  CustomPayload
+		err error
+	)
+
+	// Validate claims "iat", "exp" and "aud".
+	if validateTimes {
+		now := time.Now()
+		// Use jwt.ValidatePayload to build a jwt.VerifyOption.
+		// Validators are run in the order informed.
+		validator := jwt.ValidatePayload(
+			&pl.Payload,
+			jwt.IssuedAtValidator(now),
+			jwt.ExpirationTimeValidator(now),
+			jwt.NotBeforeValidator(now))
+		_, err = jwt.Verify([]byte(token), HMAC, &pl, validator)
+	} else {
+		_, err = jwt.Verify([]byte(token), HMAC, &pl)
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &CustomPayload{
+		Payload:       pl.Payload,
+		UserName:      pl.UserName,
+		Domain:        pl.Domain,
+		ApplicationID: pl.ApplicationID,
+		DeviceID:      pl.DeviceID,
+		TenantID:      pl.TenantID,
+	}, nil
+}
+
 // ParseRouteVars parses custom routes from a route handler
 func ParseRouteVars(r *http.Request, preserveCmdCase bool) ([]string, string) {
 	up := r.URL.Path
@@ -667,15 +712,95 @@ func SetRequestTimeout(timeOut int) {
 
 // SignJwt builds a JWT token using HMAC256 algorithm
 func SignJwt(claims *map[string]any, secretKey string) string {
-	clm := *claims
+	pl := BuildJwtPayload(claims)
+	if pl == nil {
+		return ""
+	}
+	skl := len(secretKey)
+	if skl < 32 {
+		secretKey += strings.Repeat("1", 32-skl)
+	}
+	token, err := jwt.Sign(*pl, jwt.NewHS256([]byte(secretKey)))
+	if err != nil {
+		return ""
+	}
+	return string(token)
+}
+
+// SignJwtWithPayload builds a JWT token with custom payload using HMAC256 algorithm
+func SignJwtWithPayload(pl *CustomPayload, secretKey string) string {
+	if pl == nil {
+		return ""
+	}
+	skl := len(secretKey)
+	if skl < 32 {
+		secretKey += strings.Repeat("1", 32-skl)
+	}
+	token, err := jwt.Sign(*pl, jwt.NewHS256([]byte(secretKey)))
+	if err != nil {
+		return ""
+	}
+	return string(token)
+}
+
+// BuildJwtClaims builds JWT claim from CustomPayload
+func BuildJwtClaims(pl *CustomPayload) *map[string]any {
+	claims := make(map[string]any)
+	if pl.Issuer != "" {
+		claims["iss"] = pl.Issuer
+	}
+	if pl.Subject != "" {
+		claims["sub"] = pl.Subject
+	}
+	if len(pl.Audience) > 0 {
+		claims["aud"] = pl.Audience
+	}
+	if pl.ExpirationTime != nil {
+		claims["exp"] = pl.ExpirationTime.Unix()
+	}
+	if pl.NotBefore != nil {
+		claims["nbf"] = pl.NotBefore.Unix()
+	}
+	if pl.IssuedAt != nil {
+		claims["iat"] = pl.IssuedAt.Unix()
+	}
+	if pl.UserName != "" {
+		claims["usr"] = pl.UserName
+	}
+	if pl.Domain != "" {
+		claims["dom"] = pl.Domain
+	}
+	if pl.ApplicationID != "" {
+		claims["app"] = pl.ApplicationID
+	}
+	if pl.DeviceID != "" {
+		claims["dev"] = pl.DeviceID
+	}
+	if pl.JWTID != "" {
+		claims["jti"] = pl.JWTID
+	}
+	if pl.TenantID != "" {
+		claims["tnt"] = pl.TenantID
+	}
+	return &claims
+}
+
+// BuildJwtPayload builds custom payload from claims
+func BuildJwtPayload(claims *map[string]any) *CustomPayload {
 	var (
 		usr, dom, app, dev string
 		iss, sub, jti, tnt string
 		exp, nbf, iat      int
+		pl                 *CustomPayload
+		ifc                any
 	)
 
+	if claims == nil {
+		return pl
+	}
+
+	clm := *claims
 	aud := jwt.Audience{}
-	var ifc any
 	if ifc = clm["iss"]; ifc != nil {
 		iss = ifc.(string)
 	}
@@ -735,7 +860,7 @@ func SignJwt(claims *map[string]any, secretKey string) string {
 		return &jwt.Time{Time: tt}
 	}
 
-	pl := CustomPayload{
+	pl = &CustomPayload{
 		Payload: jwt.Payload{
 			Issuer:         iss,
 			Subject:        sub,
@@ -752,18 +877,7 @@ func SignJwt(claims *map[string]any, secretKey string) string {
 		TenantID:      tnt,
 	}
 
-	skl := len(secretKey)
-	if skl < 32 {
-		secretKey += strings.Repeat("1", 32-skl)
-	}
-
-	HMAC := jwt.NewHS256([]byte(secretKey))
-	token, err := jwt.Sign(pl, HMAC)
-	if err != nil {
-		return ""
-	}
-
-	return string(token)
+	return pl
 }
 
 // ValidateJwt validates JWT and returns information using HMAC256 algorithm
@@ -787,6 +901,29 @@ func ValidateJwt(r *http.Request, secretKey string, validateTimes bool) (*JWTInf
 		return nil, fmt.Errorf(`invalid authorization token`)
 	}
 	return ParseJwt(jwtfromck, secretKey, validateTimes)
+}
+
+// ValidateJwtPayload validates JWT and returns custom payload information using HMAC256 algorithm
+func ValidateJwtPayload(r *http.Request, secretKey string, validateTimes bool) (*CustomPayload, error) {
+	var (
+		jwtfromck,
+		jwth string
+		jwtp []string
+	)
+	// Get Authorization header
+	if jwth = r.Header.Get("Authorization"); len(jwth) == 0 {
+		return nil, fmt.Errorf(`authorization header not set`)
+	}
+	if jwtp = strings.Split(jwth, " "); len(jwtp) < 2 {
+		return nil, fmt.Errorf(`invalid authorization header`)
+	}
+	if !strings.EqualFold(strings.TrimSpace(jwtp[0]), "bearer") {
+		return nil, fmt.Errorf(`invalid authorization bearer`)
+	}
+	if jwtfromck = strings.TrimSpace(jwtp[1]); len(jwtfromck) == 0 {
+		return nil, fmt.Errorf(`invalid authorization token`)
+	}
+	return ParseJwtPayload(jwtfromck, secretKey, validateTimes)
 }
 
 func getBody(r *http.Request, isMultiPart *bool) []byte {
