@@ -141,6 +141,22 @@ func TestReadAPI(t *testing.T) {
 	wg.Wait()
 }
 
+func TestIsJsonGood(t *testing.T) {
+	type TaskBase struct {
+		Name string `json:"name"`
+	}
+
+	rv := &RequestVars{
+		Body:    []byte(`{"name":"hello"}`),
+		HasBody: true,
+	}
+
+	var tb TaskBase
+	rv.IsJSONGood(&tb)
+
+	t.Logf("tb.Name = %q\n", tb.Name)
+}
+
 func BenchmarkReadAPI(b *testing.B) {
 	rl := ReadApi[[]Place](
 		"http://localhost:8010/place/municipal/",

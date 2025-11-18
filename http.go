@@ -10,7 +10,6 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"reflect"
 	"strconv"
 	"strings"
 	"time"
@@ -25,7 +24,6 @@ import (
 const (
 	REQUEST_VERSION  string = "1.1.0.0"
 	REQUEST_MODIFIED string = "24052025"
-	MAX_BUFFER       int    = 1024
 )
 
 var (
@@ -35,8 +33,13 @@ var (
 )
 
 var (
-	ErrRequestHasNoPayload = errors.New(`the request has no payload`)
-	ErrInvalidAccessToken  = errors.New(`invalid access token`)
+	ErrRequestHasNoPayload        = errors.New("the request has no payload")
+	ErrInvalidAccessToken         = errors.New("invalid access token")
+	ErrAuthorizationHeaderNotSet  = errors.New("authorization header not set")
+	ErrInvalidAuthorizationHeader = errors.New("invalid authorization header")
+	ErrInvalidAuthorizationBearer = errors.New("invalid authorization bearer")
+	ErrInvalidAuthorizationToken  = errors.New("invalid authorization token")
+	ErrSecretKeyNotSet            = errors.New("secret key not set")
 )
 
 type (
@@ -206,14 +209,15 @@ func ExecuteApi[T any](method, endPoint string, payload []byte, opts ...RequestO
 
 	// Overrides the default log function
 	// or previously set function
+	lf := logFunc
 	if rp.LogFunc != nil {
-		logFunc = rp.LogFunc
+		lf = rp.LogFunc
 	}
 
 	// Create request
 	req, err := http.NewRequest(method, endPoint, bytes.NewBuffer(payload))
 	if err != nil {
-		logFunc("%s: %s %s - %s", string(log.Error), method, endPoint, err)
+		lf("%s: %s %s - %s", string(log.Error), method, endPoint, err)
 		return x, err
 	}
 
@@ -226,8 +230,26 @@ func ExecuteApi[T any](method, endPoint string, payload []byte, opts ...RequestO
 		if k == "" || v == "" {
 			continue
 		}
-		req.Header.Set(k, v)
+		if strings.EqualFold(k, "cookie") {
+			for _, pair := range strings.Split(v, ";") {
+				pair = strings.TrimSpace(pair)
+				if pair == "" {
+					continue
+				}
+				name, val, ok := strings.Cut(pair, "=")
+				if !ok {
+					continue
+				}
+				req.AddCookie(&http.Cookie{
+					Name:  strings.TrimSpace(name),
+					Value: strings.TrimSpace(val),
+				})
+			}
+		} else {
+			req.Header.Set(k, v)
+		}
 	}
+
 	if req.Header.Get("Content-Type") == "" {
 		req.Header.Set("Content-Type", "application/json")
 	}
@@ -240,32 +262,20 @@ func ExecuteApi[T any](method, endPoint string, payload []byte, opts ...RequestO
 		}
 	}
 
-	// Apply custom headers and cookies
-	for k, v := range rp.Headers {
-		if strings.EqualFold(k, "cookie") {
-			for pair := range strings.SplitSeq(v, ";") {
-				nv := strings.SplitN(pair, "=", 2)
-				if len(nv) == 2 {
-					req.AddCookie(&http.Cookie{
-						Name:  strings.TrimSpace(nv[0]),
-						Value: strings.TrimSpace(nv[1]),
-					})
-				}
-			}
-		} else {
-			req.Header.Set(k, v)
-		}
+	to := rp.TimeOut
+	if to <= 0 {
+		to = rto // default from init() or SetRequestTimeout
 	}
 
 	// HTTP client
 	client := http.Client{
-		Timeout:   time.Second * time.Duration(rp.TimeOut),
+		Timeout:   time.Second * time.Duration(to),
 		Transport: ct,
 	}
 	resp, err := client.Do(req)
 	if err != nil {
 		err = fmt.Errorf("%s: Requesting resource at %s", err, endPoint)
-		logFunc("%s: %s %s - %s", string(log.Error), method, endPoint, err)
+		lf("%s: %s %s - %s", string(log.Error), method, endPoint, err)
 		return x, err
 	}
 	defer resp.Body.Close()
@@ -277,7 +287,7 @@ func ExecuteApi[T any](method, endPoint string, payload []byte, opts ...RequestO
 			http.StatusText(resp.StatusCode),
 			endPoint,
 		)
-		logFunc("%s: %s %s - %s", string(log.Error), method, endPoint, err)
+		lf("%s: %s %s - %s", string(log.Error), method, endPoint, err)
 		return x, err
 	}
 
@@ -285,37 +295,23 @@ func ExecuteApi[T any](method, endPoint string, payload []byte, opts ...RequestO
 	var body []byte
 	ce := strings.ToLower(resp.Header.Get("Content-Encoding"))
 	if !resp.Uncompressed && ce == "gzip" {
-		raw, err := io.ReadAll(resp.Body)
+		gzr, err := gzip.NewReader(resp.Body)
 		if err != nil {
-			logFunc("%s: %s %s - %s", string(log.Error), method, endPoint, err)
-			return x, fmt.Errorf("read failed: %w", err)
-		}
-		gzr, err := gzip.NewReader(bytes.NewBuffer(raw))
-		if err != nil {
-			logFunc("%s: %s %s - %s", string(log.Error), method, endPoint, err)
+			lf("%s: %s %s - %s", string(log.Error), method, endPoint, err)
 			return x, fmt.Errorf("read failed: %w", err)
 		}
 		defer gzr.Close()
-		body = make([]byte, 0, len(raw))
-		for {
-			uz := make([]byte, MAX_BUFFER)
-			cnt, err := gzr.Read(uz)
-			if err != nil {
-				if !(errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, io.EOF)) {
-					logFunc("%s: %s %s - %s", string(log.Error), method, endPoint, err)
-					return x, fmt.Errorf("read failed: %w", err)
-				}
-			}
-			if cnt == 0 {
-				break
-			}
-			body = append(body, uz[0:cnt]...)
+
+		body, err = io.ReadAll(gzr) // single growing buffer
+		if err != nil && err != io.ErrUnexpectedEOF && err != io.EOF {
+			lf("%s: %s %s - %s", string(log.Error), method, endPoint, err)
+			return x, fmt.Errorf("read failed: %w", err)
 		}
 	} else {
 		body, err = io.ReadAll(resp.Body)
 		if err != nil {
 			if !(errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, io.EOF)) {
-				logFunc("%s: %s %s - %s", string(log.Error), method, endPoint, err)
+				lf("%s: %s %s - %s", string(log.Error), method, endPoint, err)
 				return x, fmt.Errorf("read failed: %w", err)
 			}
 		}
@@ -326,29 +322,46 @@ func ExecuteApi[T any](method, endPoint string, payload []byte, opts ...RequestO
 	case []byte:
 		return any(body).(T), nil
 	default:
-		ct := strings.ToLower(req.Header.Get("Content-Type"))
-		if rp.AssumedContentType != "" {
-			ct = rp.AssumedContentType
+		// Get the response content type
+		// Change content type if assumed content type is set
+		// If ct is empty, fallback to request content type
+		ct := strings.ToLower(strings.TrimSpace(resp.Header.Get("Content-Type")))
+		if act := strings.ToLower(strings.TrimSpace(rp.AssumedContentType)); act != "" {
+			ct = act
 		}
+		if ct == "" {
+			ct = strings.ToLower(strings.TrimSpace(req.Header.Get("Content-Type")))
+		}
+		if i := strings.IndexByte(ct, ';'); i >= 0 {
+			ct = ct[:i]
+		}
+
+		// Default content-type (default)
 		switch ct {
 		case "application/json":
 			err = json.Unmarshal(body, &x)
 			if err != nil {
-				logFunc("%s: %s %s - %s", string(log.Error), method, endPoint, err)
+				lf("%s: %s %s - %s", string(log.Error), method, endPoint, err)
 			}
 			return x, err
-		case "text/xml":
+		case "text/xml", "application/xml":
 			err = xml.Unmarshal(body, &x)
 			if err != nil {
-				logFunc("%s: %s %s - %s", string(log.Error), method, endPoint, err)
+				lf("%s: %s %s - %s", string(log.Error), method, endPoint, err)
 			}
 			return x, err
-		case "plain/text":
-			str, _ := any(string(body)).(T)
-			return str, err
+		case "text/plain":
+			if v, ok := any(string(body)).(T); ok {
+				return v, nil
+			}
+			return x, err
 		}
-		str, _ := any(body).(T)
-		return str, nil
+
+		// Unknown content type, best-effort fallback:
+		if v, ok := any(body).(T); ok { // T == []byte but we already handled that; still safe
+			return v, nil
+		}
+		return x, nil
 	}
 }
 
@@ -369,7 +382,7 @@ func ExecuteJsonApi(method string, endPoint string, payload []byte, opts ...Requ
 	rd.Operation = trd.Operation
 	rd.Page = trd.Page
 	rd.PageCount = trd.PageCount
-	rd.PageSize = trd.PageCount
+	rd.PageSize = trd.PageSize
 	rd.Tag = trd.Tag
 	rd.TaskID = trd.TaskID
 	rd.WorkerID = trd.WorkerID
@@ -413,7 +426,7 @@ func GetBody(r *http.Request) []byte {
 
 // GetRequestVarsOnly get request variables
 func GetRequestVarsOnly(r *http.Request, preserveCmdCase bool) RequestVars {
-	rv := &RequestVars{
+	rv := RequestVars{
 		Method: strings.ToUpper(r.Method),
 	}
 	rv.Body = getBody(r, &rv.Variables.IsMultipart)
@@ -437,7 +450,7 @@ func GetRequestVarsOnly(r *http.Request, preserveCmdCase bool) RequestVars {
 	rv.Variables.HasFormData = len(rv.Variables.FormData.Pair) > 0
 	// Get route commands
 	rv.Variables.Command, rv.Variables.Key = ParseRouteVars(r, preserveCmdCase)
-	return *rv
+	return rv
 }
 
 // GetRequestVars requests variables and return JWT validation result
@@ -445,7 +458,7 @@ func GetRequestVars(r *http.Request, secretKey string, validateTimes, preserveCm
 	rv := GetRequestVarsOnly(r, preserveCmdCase)
 	rv.Token = nil
 	// Silently ignore OPTIONS methid
-	if strings.EqualFold(r.Method, "OPTIONS") {
+	if strings.EqualFold(r.Method, http.MethodOptions) {
 		return rv, nil
 	}
 	ji, err := ValidateJwt(r, secretKey, validateTimes)
@@ -485,7 +498,7 @@ func IsJsonGood(r *http.Request, v any) error {
 	if len(b) == 0 {
 		return ErrRequestHasNoPayload
 	}
-	if err := json.Unmarshal(b, &v); err != nil {
+	if err := json.Unmarshal(b, v); err != nil {
 		return err
 	}
 	return nil
@@ -589,21 +602,22 @@ func ParsePath(urlPath string, normalizePathCase, inclSlashPfx bool) ([]string, 
 
 // ParseJwt validates, parses JWT and returns information using HMAC256 algorithm
 func ParseJwt(token, secretKey string, validateTimes bool) (*JWTInfo, error) {
-	if len(secretKey) == 0 {
-		return nil, fmt.Errorf(`secret key not set`)
+	sk := secretKey
+	skl := len(sk)
+	if skl == 0 {
+		return nil, ErrSecretKeyNotSet
 	}
 	var (
 		pl  CustomPayload
 		err error
 	)
 
-	skl := len(secretKey)
 	if skl < 32 {
-		secretKey += strings.Repeat("1", 32-skl)
+		sk += strings.Repeat("1", 32-skl)
 	}
 
 	// Parse JWT
-	HMAC := jwt.NewHS256([]byte(secretKey))
+	HMAC := jwt.NewHS256([]byte(sk))
 
 	// Validate claims "iat", "exp" and "aud".
 	if validateTimes {
@@ -636,16 +650,17 @@ func ParseJwt(token, secretKey string, validateTimes bool) (*JWTInfo, error) {
 
 // ParseJwtPayload validates, parses JWT and returns CustomPayload information using HMAC256 algorithm
 func ParseJwtPayload(token, secretKey string, validateTimes bool) (*CustomPayload, error) {
-	if len(secretKey) == 0 {
-		return nil, fmt.Errorf(`secret key not set`)
+	sk := secretKey
+	skl := len(sk)
+	if skl == 0 {
+		return nil, ErrSecretKeyNotSet
 	}
-	skl := len(secretKey)
 	if skl < 32 {
-		secretKey += strings.Repeat("1", 32-skl)
+		sk += strings.Repeat("1", 32-skl)
 	}
 
 	// Parse JWT
-	HMAC := jwt.NewHS256([]byte(secretKey))
+	HMAC := jwt.NewHS256([]byte(sk))
 
 	var (
 		pl  CustomPayload
@@ -702,7 +717,10 @@ func ParseRouteVars(r *http.Request, preserveCmdCase bool) ([]string, string) {
 
 // SetLog sets a log function to ExecuteAPI calls
 func SetLog(f func(string, ...any)) {
-	logFunc = f
+	if f == nil {
+		f = func(string, ...any) {}
+	}
+	logFunc = f // assume called once at startup, before goroutines
 }
 
 // SetRequestTimeOut sets the new timeout value
@@ -716,11 +734,15 @@ func SignJwt(claims *map[string]any, secretKey string) string {
 	if pl == nil {
 		return ""
 	}
-	skl := len(secretKey)
-	if skl < 32 {
-		secretKey += strings.Repeat("1", 32-skl)
+	sk := secretKey
+	skl := len(sk)
+	if skl == 0 {
+		return ""
 	}
-	token, err := jwt.Sign(*pl, jwt.NewHS256([]byte(secretKey)))
+	if skl < 32 {
+		sk += strings.Repeat("1", 32-skl)
+	}
+	token, err := jwt.Sign(*pl, jwt.NewHS256([]byte(sk)))
 	if err != nil {
 		return ""
 	}
@@ -732,11 +754,15 @@ func SignJwtWithPayload(pl *CustomPayload, secretKey string) string {
 	if pl == nil {
 		return ""
 	}
-	skl := len(secretKey)
-	if skl < 32 {
-		secretKey += strings.Repeat("1", 32-skl)
+	sk := secretKey
+	skl := len(sk)
+	if skl == 0 {
+		return ""
 	}
-	token, err := jwt.Sign(*pl, jwt.NewHS256([]byte(secretKey)))
+	if skl < 32 {
+		sk += strings.Repeat("1", 32-skl)
+	}
+	token, err := jwt.Sign(*pl, jwt.NewHS256([]byte(sk)))
 	if err != nil {
 		return ""
 	}
@@ -787,87 +813,72 @@ func BuildJwtClaims(pl *CustomPayload) *map[string]any {
 
 // BuildJwtPayload builds custom payload from claims
 func BuildJwtPayload(claims *map[string]any) *CustomPayload {
+	if claims == nil {
+		return nil
+	}
+	clm := *claims
+
 	var (
 		usr, dom, app, dev string
 		iss, sub, jti, tnt string
-		exp, nbf, iat      int
-		pl                 *CustomPayload
-		ifc                any
+		exp, nbf, iat      int64
+		aud                jwt.Audience
 	)
 
-	if claims == nil {
-		return pl
+	if v, ok := clm["iss"]; ok {
+		iss, _ = asString(v)
 	}
-
-	clm := *claims
-	aud := jwt.Audience{}
-	if ifc = clm["iss"]; ifc != nil {
-		iss = ifc.(string)
+	if v, ok := clm["sub"]; ok {
+		sub, _ = asString(v)
 	}
-	if ifc = clm["sub"]; ifc != nil {
-		sub = ifc.(string)
-	}
-	if ifc = clm["aud"]; ifc != nil {
-		t := reflect.TypeOf(ifc)
-
-		// check if this is a slice
-		if t.Kind() == reflect.Slice {
-			// check if what type of slice are the elements
-			if t.Elem().Kind() == reflect.String {
-				aud = ifc.([]string)
-			}
-		}
-
-		// check if this is a string
-		if t.Kind() == reflect.String {
-			aud = jwt.Audience([]string{ifc.(string)})
+	if v, ok := clm["aud"]; ok {
+		if sl, ok := asStringSlice(v); ok {
+			aud = jwt.Audience(sl)
 		}
 	}
-	if ifc = clm["exp"]; ifc != nil {
-		exp = ifc.(int)
+	if v, ok := clm["exp"]; ok {
+		exp, _ = asInt64(v)
 	}
-	if ifc = clm["nbf"]; ifc != nil {
-		nbf = ifc.(int)
+	if v, ok := clm["nbf"]; ok {
+		nbf, _ = asInt64(v)
 	}
-	if ifc = clm["iat"]; ifc != nil {
-		iat = ifc.(int)
+	if v, ok := clm["iat"]; ok {
+		iat, _ = asInt64(v)
 	}
-	if ifc = clm["usr"]; ifc != nil {
-		usr = ifc.(string)
+	if v, ok := clm["usr"]; ok {
+		usr, _ = asString(v)
 	}
-	if ifc = clm["dom"]; ifc != nil {
-		dom = ifc.(string)
+	if v, ok := clm["dom"]; ok {
+		dom, _ = asString(v)
 	}
-	if ifc = clm["app"]; ifc != nil {
-		app = ifc.(string)
+	if v, ok := clm["app"]; ok {
+		app, _ = asString(v)
 	}
-	if ifc = clm["dev"]; ifc != nil {
-		dev = ifc.(string)
+	if v, ok := clm["dev"]; ok {
+		dev, _ = asString(v)
 	}
-	if ifc = clm["jti"]; ifc != nil {
-		jti = ifc.(string)
+	if v, ok := clm["jti"]; ok {
+		jti, _ = asString(v)
 	}
-	if ifc = clm["tnt"]; ifc != nil {
-		tnt = ifc.(string)
+	if v, ok := clm["tnt"]; ok {
+		tnt, _ = asString(v)
 	}
 
 	unixt := func(unixts int64) *jwt.Time {
-		epoch := time.Date(1970, time.January, 1, 0, 0, 0, 0, time.UTC)
-		tt := time.Unix(unixts, 0)
-		if tt.Before(epoch) {
-			tt = epoch
+		if unixts <= 0 {
+			return nil
 		}
-		return &jwt.Time{Time: tt}
+		return &jwt.Time{Time: time.Unix(unixts, 0).UTC()}
 	}
 
-	pl = &CustomPayload{
+	return &CustomPayload{
 		Payload: jwt.Payload{
 			Issuer:         iss,
 			Subject:        sub,
 			Audience:       aud,
-			ExpirationTime: unixt(int64(exp)),
-			NotBefore:      unixt(int64(nbf)),
-			IssuedAt:       unixt(int64(iat)),
+			ExpirationTime: unixt(exp),
+			NotBefore:      unixt(nbf),
+			IssuedAt:       unixt(iat),
 			JWTID:          jti,
 		},
 		UserName:      usr,
@@ -876,8 +887,6 @@ func BuildJwtPayload(claims *map[string]any) *CustomPayload {
 		DeviceID:      dev,
 		TenantID:      tnt,
 	}
-
-	return pl
 }
 
 // ValidateJwt validates JWT and returns information using HMAC256 algorithm
@@ -889,16 +898,16 @@ func ValidateJwt(r *http.Request, secretKey string, validateTimes bool) (*JWTInf
 	)
 	// Get Authorization header
 	if jwth = r.Header.Get("Authorization"); len(jwth) == 0 {
-		return nil, fmt.Errorf(`authorization header not set`)
+		return nil, ErrAuthorizationHeaderNotSet
 	}
 	if jwtp = strings.Split(jwth, " "); len(jwtp) < 2 {
-		return nil, fmt.Errorf(`invalid authorization header`)
+		return nil, ErrInvalidAuthorizationHeader
 	}
 	if !strings.EqualFold(strings.TrimSpace(jwtp[0]), "bearer") {
-		return nil, fmt.Errorf(`invalid authorization bearer`)
+		return nil, ErrInvalidAuthorizationBearer
 	}
 	if jwtfromck = strings.TrimSpace(jwtp[1]); len(jwtfromck) == 0 {
-		return nil, fmt.Errorf(`invalid authorization token`)
+		return nil, ErrInvalidAuthorizationToken
 	}
 	return ParseJwt(jwtfromck, secretKey, validateTimes)
 }
@@ -912,25 +921,22 @@ func ValidateJwtPayload(r *http.Request, secretKey string, validateTimes bool) (
 	)
 	// Get Authorization header
 	if jwth = r.Header.Get("Authorization"); len(jwth) == 0 {
-		return nil, fmt.Errorf(`authorization header not set`)
+		return nil, ErrAuthorizationHeaderNotSet
 	}
 	if jwtp = strings.Split(jwth, " "); len(jwtp) < 2 {
-		return nil, fmt.Errorf(`invalid authorization header`)
+		return nil, ErrInvalidAuthorizationHeader
 	}
 	if !strings.EqualFold(strings.TrimSpace(jwtp[0]), "bearer") {
-		return nil, fmt.Errorf(`invalid authorization bearer`)
+		return nil, ErrInvalidAuthorizationBearer
 	}
 	if jwtfromck = strings.TrimSpace(jwtp[1]); len(jwtfromck) == 0 {
-		return nil, fmt.Errorf(`invalid authorization token`)
+		return nil, ErrInvalidAuthorizationToken
 	}
 	return ParseJwtPayload(jwtfromck, secretKey, validateTimes)
 }
 
 func getBody(r *http.Request, isMultiPart *bool) []byte {
-	var (
-		body []byte
-		c1   string
-	)
+	var c1 string
 	const (
 		mulpart string = "multipart/form-data"
 		furlenc string = "application/x-www-form-urlencoded"
@@ -943,18 +949,14 @@ func getBody(r *http.Request, isMultiPart *bool) []byte {
 		isMultiPart = new(bool)
 	}
 	*isMultiPart = c1 == mulpart
-	if useBody := (c1 != furlenc && !*isMultiPart) && (method == "POST" || method == "PUT" || method == "DELETE"); useBody {
-		// We are receiving body as bytes to Unmarshall later depending on the type
-		b := func() []byte {
-			if r.Body != nil {
-				b, _ := io.ReadAll(r.Body)
-				defer r.Body.Close()
-				return b
-			}
-			return []byte{}
-		}
-		body = b()
+	useBody := (c1 != furlenc && !*isMultiPart) && (method == "POST" || method == "PUT" || method == "DELETE")
+	if !useBody || r.Body == nil {
+		return nil
 	}
+
+	// single read, no closure, no extra empty slice
+	body, _ := io.ReadAll(r.Body)
+	r.Body.Close()
 	return body
 }
 
@@ -978,6 +980,89 @@ func getJsonConverted[T any](result *ResultData) rslt.ResultAny[T] {
 	return rslt.ResultAny[T]{
 		Result: result.Result,
 		Data:   data,
+	}
+}
+
+// asString tries to coerce common types into string.
+func asString(v any) (string, bool) {
+	switch t := v.(type) {
+	case string:
+		return t, true
+	case fmt.Stringer:
+		return t.String(), true
+	case []byte:
+		return string(t), true
+	default:
+		return "", false
+	}
+}
+
+// asInt64 supports int, int64, float64, json.Number, and numeric strings.
+func asInt64(v any) (int64, bool) {
+	switch t := v.(type) {
+	case int:
+		return int64(t), true
+	case int8:
+		return int64(t), true
+	case int16:
+		return int64(t), true
+	case int32:
+		return int64(t), true
+	case int64:
+		return t, true
+	case uint:
+		return int64(t), true
+	case uint8:
+		return int64(t), true
+	case uint16:
+		return int64(t), true
+	case uint32:
+		return int64(t), true
+	case uint64:
+		if t > ^uint64(0)>>1 {
+			return 0, false // overflow if we try to cast
+		}
+		return int64(t), true
+	case float32:
+		return int64(t), true
+	case float64:
+		return int64(t), true
+	case json.Number:
+		n, err := t.Int64()
+		if err != nil {
+			return 0, false
+		}
+		return n, true
+	case string:
+		n, err := strconv.ParseInt(t, 10, 64)
+		if err != nil {
+			return 0, false
+		}
+		return n, true
+	default:
+		return 0, false
+	}
+}
+
+// asStringSlice handles string, []string, and []any of strings.
+func asStringSlice(v any) ([]string, bool) {
+	switch t := v.(type) {
+	case []string:
+		return t, true
+	case string:
+		return []string{t}, true
+	case []any:
+		out := make([]string, 0, len(t))
+		for _, e := range t {
+			s, ok := asString(e)
+			if !ok {
+				return nil, false
+			}
+			out = append(out, s)
+		}
+		return out, true
+	default:
+		return nil, false
 	}
 }
 

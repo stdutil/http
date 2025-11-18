@@ -74,7 +74,7 @@ func (rv *RequestVars) IsJSONGood(v any) error {
 	if !rv.HasBody {
 		return ErrRVNoBody
 	}
-	if err := json.Unmarshal(rv.Body, &v); err != nil {
+	if err := json.Unmarshal(rv.Body, v); err != nil {
 		return err
 	}
 	return nil
