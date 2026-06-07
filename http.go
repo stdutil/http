@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	br "github.com/andybalholm/brotli"
 	"github.com/gbrlsnchs/jwt/v3"
 	"github.com/go-chi/chi/v5"
 	"github.com/stdutil/log"
@@ -294,23 +295,38 @@ func ExecuteApi[T any](method, endPoint string, payload []byte, opts ...RequestO
 	// Decode response body
 	var body []byte
 	ce := strings.ToLower(resp.Header.Get("Content-Encoding"))
-	if !resp.Uncompressed && ce == "gzip" {
-		gzr, err := gzip.NewReader(resp.Body)
-		if err != nil {
-			lf("%s: %s %s - %s", string(log.Error), method, endPoint, err)
-			return x, fmt.Errorf("read failed: %w", err)
-		}
-		defer gzr.Close()
-
-		body, err = io.ReadAll(gzr) // single growing buffer
-		if err != nil && err != io.ErrUnexpectedEOF && err != io.EOF {
-			lf("%s: %s %s - %s", string(log.Error), method, endPoint, err)
-			return x, fmt.Errorf("read failed: %w", err)
-		}
-	} else {
+	if resp.Uncompressed || ce == "" {
 		body, err = io.ReadAll(resp.Body)
 		if err != nil {
 			if !(errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, io.EOF)) {
+				lf("%s: %s %s - %s", string(log.Error), method, endPoint, err)
+				return x, fmt.Errorf("read failed: %w", err)
+			}
+		}
+	} else {
+		if ce == "gzip" {
+			x, err = func() (T, error) {
+				gzr, err := gzip.NewReader(resp.Body)
+				if err != nil {
+					return x, fmt.Errorf("read failed: %w", err)
+				}
+				defer gzr.Close()
+
+				body, err = io.ReadAll(gzr) // single growing buffer
+				if err != nil && err != io.ErrUnexpectedEOF && err != io.EOF {
+					return x, fmt.Errorf("read failed: %w", err)
+				}
+				return x, nil
+			}()
+			if err != nil {
+				lf("%s: %s %s - %s", string(log.Error), method, endPoint, err)
+				return x, err
+			}
+		}
+		if ce == "br" {
+			gzr := br.NewReader(resp.Body)
+			body, err = io.ReadAll(gzr)
+			if err != nil && err != io.ErrUnexpectedEOF && err != io.EOF {
 				lf("%s: %s %s - %s", string(log.Error), method, endPoint, err)
 				return x, fmt.Errorf("read failed: %w", err)
 			}
