@@ -17,6 +17,7 @@ import (
 	br "github.com/andybalholm/brotli"
 	"github.com/gbrlsnchs/jwt/v3"
 	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 	"github.com/stdutil/log"
 	nv "github.com/stdutil/name-value"
 	rslt "github.com/stdutil/result"
@@ -226,13 +227,16 @@ func ExecuteApi[T any](method, endPoint string, payload []byte, opts ...RequestO
 	req.Header.Set("User-Agent", fmt.Sprintf("com.github.stdutil.http/%s-%s", REQUEST_VERSION, REQUEST_MODIFIED))
 	req.Header.Set("Connection", "keep-alive")
 	req.Header.Set("Accept", "*/*")
+	if method == http.MethodPost || method == http.MethodPut || method == http.MethodPatch {
+		req.Header.Set("Idempotency-Key", uuid.New().String())
+	}
 
 	for k, v := range rp.Headers {
 		if k == "" || v == "" {
 			continue
 		}
 		if strings.EqualFold(k, "cookie") {
-			for _, pair := range strings.Split(v, ";") {
+			for pair := range strings.SplitSeq(v, ";") {
 				pair = strings.TrimSpace(pair)
 				if pair == "" {
 					continue
