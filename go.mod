@@ -5,6 +5,7 @@ go 1.24.0
 require (
 	github.com/andybalholm/brotli v1.2.1
 	github.com/gbrlsnchs/jwt/v3 v3.0.1
+	github.com/google/uuid v1.6.0
 	github.com/stdutil/log v0.1.0
 	github.com/stdutil/name-value v0.1.0
 	github.com/stdutil/result v0.1.0
