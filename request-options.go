@@ -10,6 +10,7 @@ type (
 		Headers            map[string]string    // Headers for the request
 		LogFunc            func(string, ...any) // Log function
 		AssumedContentType string               // Assumed response body content type
+		ReturnBodyOn304    bool                 // Return response on 304 Not Modified
 	}
 	// RequestOption for <REST verb>Api request functions
 	RequestOption func(opt *RequestParam) error
@@ -48,6 +49,16 @@ func Headers(hdr map[string]string) RequestOption {
 	}
 }
 
+// Header adds a single header to the request
+//
+// This is used with <REST verb>Api functions
+func Header(k, v string) RequestOption {
+	return func(rp *RequestParam) error {
+		rp.Headers[k] = v
+		return nil
+	}
+}
+
 // Log sets the log function that executes on ExecuteAPI calls
 //
 // This is used with <REST verb>Api functions
@@ -64,6 +75,16 @@ func Log(f func(string, ...any)) RequestOption {
 func AssumedContentType(ct string) RequestOption {
 	return func(rp *RequestParam) error {
 		rp.AssumedContentType = ct
+		return nil
+	}
+}
+
+// ReturnBodyOn304 sets whether to return the response body on 304 Not Modified
+//
+// This is used with <REST verb>Api functions
+func ReturnBodyOn304(returnBody bool) RequestOption {
+	return func(rp *RequestParam) error {
+		rp.ReturnBodyOn304 = returnBody
 		return nil
 	}
 }

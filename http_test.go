@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 )
@@ -139,6 +140,32 @@ func TestReadAPI(t *testing.T) {
 		}()
 	}
 	wg.Wait()
+}
+
+func TestAPIWithCache(t *testing.T) {
+	uc := NewURLCache(100, 0, 0)
+	SetResponseStore(uc)
+	SetLog(t.Logf)
+	rb304 := false
+
+	for i := range 30 {
+		ts := time.Now()
+		res, err := ExecuteApi[any](
+			"GET",
+			"https://jsonplaceholder.typicode.com/comments?postId=1",
+			nil,
+			ReturnBodyOn304(rb304))
+		if err != nil {
+			fmt.Printf("Result: %s\n", err)
+			t.Fail()
+			return
+		}
+		_ = res
+		_ = i
+		//t.Logf("[%d]:%+v", i, res)
+		elapsed := time.Since(ts)
+		fmt.Printf("%s (%v) took %s\n", "ExecuteApi", rb304, elapsed)
+	}
 }
 
 func TestIsJsonGood(t *testing.T) {

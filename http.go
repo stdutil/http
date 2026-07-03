@@ -3,6 +3,7 @@ package http
 import (
 	"bytes"
 	"compress/gzip"
+	"compress/zlib"
 	"encoding/json"
 	"encoding/xml"
 	"errors"
@@ -24,24 +25,26 @@ import (
 )
 
 const (
-	REQUEST_VERSION  string = "1.1.0.0"
-	REQUEST_MODIFIED string = "24052025"
+	REQUEST_VERSION  string = "1.2.0.0"
+	REQUEST_MODIFIED string = "03072026"
 )
 
 var (
 	rto     int // Request timeout in seconds
 	ct      *http.Transport
 	logFunc func(string, ...any)
+	rs      ResponseStorage
 )
 
 var (
-	ErrRequestHasNoPayload        = errors.New("the request has no payload")
-	ErrInvalidAccessToken         = errors.New("invalid access token")
-	ErrAuthorizationHeaderNotSet  = errors.New("authorization header not set")
-	ErrInvalidAuthorizationHeader = errors.New("invalid authorization header")
-	ErrInvalidAuthorizationBearer = errors.New("invalid authorization bearer")
-	ErrInvalidAuthorizationToken  = errors.New("invalid authorization token")
-	ErrSecretKeyNotSet            = errors.New("secret key not set")
+	ErrRequestHasNoPayload        = errors.New("http error: the request has no payload")
+	ErrInvalidAccessToken         = errors.New("http error: invalid access token")
+	ErrAuthorizationHeaderNotSet  = errors.New("http error: authorization header not set")
+	ErrInvalidAuthorizationHeader = errors.New("http error: invalid authorization header")
+	ErrInvalidAuthorizationBearer = errors.New("http error: invalid authorization bearer")
+	ErrInvalidAuthorizationToken  = errors.New("http error: invalid authorization token")
+	ErrSecretKeyNotSet            = errors.New("http error: secret key not set")
+	ErrStatusCodeNotModified      = errors.New("http error: status code not modified")
 )
 
 type (
@@ -70,72 +73,97 @@ func init() {
 	logFunc = func(s string, a ...any) {} // set to black hole function
 }
 
-// ExecuteApi (ChatGPT optimized) wraps http operation that change or read data and returns a byte array.
+// ExecuteApi wraps http operation that change or read data and returns a byte array.
 //
 // On headers:
 //   - Content-Type: If this header is not set, it defaults to "application/json"
 //   - Content-Encoding: If compressed is true, it is set to "gzip"
-func ExecuteApi[T any](method, endPoint string, payload []byte, opts ...RequestOption) (T, error) {
+func ExecuteApi[T any](method, endpoint string, payload []byte, opts ...RequestOption) (T, error) {
 	var x T
 
 	// Apply options
-	rp := RequestParam{}
+	rp := RequestParam{
+		TimeOut:            rto,
+		Compressed:         false,
+		Headers:            make(map[string]string),
+		LogFunc:            nil,
+		AssumedContentType: "application/json",
+		ReturnBodyOn304:    false,
+	}
 	for _, o := range opts {
 		if o != nil {
 			o(&rp)
 		}
 	}
 
-	// Overrides the default log function
-	// or previously set function
+	// Overrides the default log function or previously set function
 	lf := logFunc
 	if rp.LogFunc != nil {
 		lf = rp.LogFunc
 	}
 
+	to := rto // default from init() or SetRequestTimeout
+	if rp.TimeOut > 0 {
+		to = rp.TimeOut
+	}
+
+	pl := payload
+	if rp.Compressed && (method == http.MethodPost || method == http.MethodPut || method == http.MethodPatch) {
+		var err error
+		pl, err = compressGzip(payload)
+		if err != nil {
+			lf("%v: %s %s - %s", log.Error, method, endpoint, err)
+			return x, err
+		}
+	}
+
 	// Create request
-	req, err := http.NewRequest(method, endPoint, bytes.NewBuffer(payload))
+	req, err := http.NewRequest(method, endpoint, bytes.NewReader(pl))
 	if err != nil {
-		lf("%s: %s %s - %s", string(log.Error), method, endPoint, err)
+		lf("%v: %s %s - %s", log.Error, method, endpoint, err)
 		return x, err
 	}
 
 	// Default headers
 	req.Header.Set("User-Agent", fmt.Sprintf("com.github.stdutil.http/%s-%s", REQUEST_VERSION, REQUEST_MODIFIED))
-	req.Header.Set("Connection", "keep-alive")
 	req.Header.Set("Accept", "*/*")
+
+	// Set Idempotency-Key header for POST/PUT/PATCH requests
 	if method == http.MethodPost || method == http.MethodPut || method == http.MethodPatch {
 		req.Header.Set("Idempotency-Key", uuid.New().String())
 	}
 
-	// Get etag from the container list and send an If-None-Match
-	if method == http.MethodGet || method == http.MethodHead {
-		if etag, ok := ShouldSendIfNoneMatch(endPoint); ok {
-			req.Header.Set("If-None-Match", etag)
+	canOrShouldStore := rs != nil && method == http.MethodGet
+
+	// Get ETag from the container list and send an If-None-Match if the response store is available
+	if canOrShouldStore {
+		if meta, ok := rs.Get(endpoint); ok {
+			req.Header.Set("If-None-Match", meta.ETag)
 		}
 	}
 
+	// Override headers from request options
 	for k, v := range rp.Headers {
 		if k == "" || v == "" {
 			continue
 		}
-		if strings.EqualFold(k, "cookie") {
-			for pair := range strings.SplitSeq(v, ";") {
-				pair = strings.TrimSpace(pair)
-				if pair == "" {
-					continue
-				}
-				name, val, ok := strings.Cut(pair, "=")
-				if !ok {
-					continue
-				}
-				req.AddCookie(&http.Cookie{
-					Name:  strings.TrimSpace(name),
-					Value: strings.TrimSpace(val),
-				})
-			}
-		} else {
+		if !strings.EqualFold(k, "cookie") {
 			req.Header.Set(k, v)
+			continue
+		}
+		for pair := range strings.SplitSeq(v, ";") {
+			pair = strings.TrimSpace(pair)
+			if pair == "" {
+				continue
+			}
+			name, val, ok := strings.Cut(pair, "=")
+			if !ok {
+				continue
+			}
+			req.AddCookie(&http.Cookie{
+				Name:  strings.TrimSpace(name),
+				Value: strings.TrimSpace(val),
+			})
 		}
 	}
 
@@ -151,81 +179,102 @@ func ExecuteApi[T any](method, endPoint string, payload []byte, opts ...RequestO
 		}
 	}
 
-	to := rp.TimeOut
-	if to <= 0 {
-		to = rto // default from init() or SetRequestTimeout
-	}
-
 	// HTTP client
 	client := http.Client{
 		Timeout:   time.Second * time.Duration(to),
 		Transport: ct,
 	}
+
 	resp, err := client.Do(req)
 	if err != nil {
-		err = fmt.Errorf("%s: Requesting resource at %s", err, endPoint)
-		lf("%s: %s %s - %s", string(log.Error), method, endPoint, err)
+		lf("%v: %s %s - %s", log.Error, method, endpoint, err)
 		return x, err
 	}
 	defer resp.Body.Close()
 
 	// Check HTTP status code
-	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		err = fmt.Errorf("HTTP error: %d %s (Requesting resource at %s)",
+	if resp.StatusCode == http.StatusNotModified {
+		if !canOrShouldStore || !rp.ReturnBodyOn304 {
+			return x, ErrStatusCodeNotModified
+		}
+	} else if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		err = fmt.Errorf("http error: %d %s",
 			resp.StatusCode,
 			http.StatusText(resp.StatusCode),
-			endPoint,
 		)
-		lf("%s: %s %s - %s", string(log.Error), method, endPoint, err)
+		lf("%v: %s %s - %s", log.Error, method, endpoint, err)
 		return x, err
 	}
 
-	// Store ETag for later retrieval
-	if method == http.MethodGet || method == http.MethodHead {
-		if etag := resp.Header.Get("ETag"); etag != "" {
-			SetETag(endPoint, etag)
-		}
+	// Determine content type
+	ct := determineContentType(resp, req, &rp)
+
+	if method == http.MethodHead {
+		return x, nil
 	}
 
-	// Decode response body
+	// Return body
 	var body []byte
-	ce := strings.ToLower(resp.Header.Get("Content-Encoding"))
-	if resp.Uncompressed || ce == "" {
-		body, err = io.ReadAll(resp.Body)
-		if err != nil {
-			if !(errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, io.EOF)) {
-				lf("%s: %s %s - %s", string(log.Error), method, endPoint, err)
-				return x, fmt.Errorf("read failed: %w", err)
-			}
+	if resp.StatusCode == http.StatusNotModified {
+		meta, ok := rs.Get(endpoint)
+		if !ok {
+			return x, ErrStatusCodeNotModified
 		}
+		body = meta.Body
+		ct = meta.ContentType
 	} else {
-		if ce == "gzip" {
-			x, err = func() (T, error) {
-				gzr, err := gzip.NewReader(resp.Body)
+		ce := strings.ToLower(strings.TrimSpace(resp.Header.Get("Content-Encoding")))
+		if !resp.Uncompressed && ce != "" {
+			switch ce {
+			case "gzip":
+				body, err = readGzip(resp)
 				if err != nil {
-					return x, fmt.Errorf("read failed: %w", err)
+					lf("%v: %s %s - %s", log.Error, method, endpoint, err)
+					return x, err
 				}
-				defer gzr.Close()
-
-				body, err = io.ReadAll(gzr) // single growing buffer
-				if err != nil && err != io.ErrUnexpectedEOF && err != io.EOF {
-					return x, fmt.Errorf("read failed: %w", err)
+			case "br":
+				body, err = readBrotli(resp)
+				if err != nil {
+					lf("%v: %s %s - %s", log.Error, method, endpoint, err)
+					return x, err
 				}
-				return x, nil
-			}()
+			case "deflate":
+				body, err = readDeflate(resp)
+				if err != nil {
+					lf("%v: %s %s - %s", log.Error, method, endpoint, err)
+					return x, err
+				}
+			default:
+				return x, fmt.Errorf("unsupported Content-Encoding: %s", ce)
+			}
+		} else {
+			body, err = readUncompressed(resp)
 			if err != nil {
-				lf("%s: %s %s - %s", string(log.Error), method, endPoint, err)
+				lf("%v: %s %s - %s", log.Error, method, endpoint, err)
 				return x, err
 			}
 		}
-		if ce == "br" {
-			gzr := br.NewReader(resp.Body)
-			body, err = io.ReadAll(gzr)
-			if err != nil && err != io.ErrUnexpectedEOF && err != io.EOF {
-				lf("%s: %s %s - %s", string(log.Error), method, endPoint, err)
-				return x, fmt.Errorf("read failed: %w", err)
+	}
+
+	// Store ETag for later retrieval
+	if canOrShouldStore && rp.ReturnBodyOn304 && resp.StatusCode != http.StatusNotModified {
+		if etag := resp.Header.Get("ETag"); etag != "" {
+			err = rs.Set(
+				endpoint,
+				MetaData{
+					ETag:        etag,
+					Body:        body,
+					ContentType: ct,
+				})
+			if err != nil {
+				// Response cache failures are logged but do not cause ExecuteApi to fail.
+				lf("%v: %s %s - %s", log.Error, method, endpoint, err)
 			}
 		}
+	}
+
+	if len(body) == 0 {
+		return x, nil
 	}
 
 	// Type-specific return
@@ -233,32 +282,17 @@ func ExecuteApi[T any](method, endPoint string, payload []byte, opts ...RequestO
 	case []byte:
 		return any(body).(T), nil
 	default:
-		// Get the response content type
-		// Change content type if assumed content type is set
-		// If ct is empty, fallback to request content type
-		ct := strings.ToLower(strings.TrimSpace(resp.Header.Get("Content-Type")))
-		if act := strings.ToLower(strings.TrimSpace(rp.AssumedContentType)); act != "" {
-			ct = act
-		}
-		if ct == "" {
-			ct = strings.ToLower(strings.TrimSpace(req.Header.Get("Content-Type")))
-		}
-		if i := strings.IndexByte(ct, ';'); i >= 0 {
-			ct = ct[:i]
-		}
-
-		// Default content-type (default)
 		switch ct {
 		case "application/json":
 			err = json.Unmarshal(body, &x)
 			if err != nil {
-				lf("%s: %s %s - %s", string(log.Error), method, endPoint, err)
+				lf("%v: %s %s - %s", log.Error, method, endpoint, err)
 			}
 			return x, err
 		case "text/xml", "application/xml":
 			err = xml.Unmarshal(body, &x)
 			if err != nil {
-				lf("%s: %s %s - %s", string(log.Error), method, endPoint, err)
+				lf("%v: %s %s - %s", log.Error, method, endpoint, err)
 			}
 			return x, err
 		case "text/plain":
@@ -302,15 +336,18 @@ func ExecuteJsonApi(method string, endPoint string, payload []byte, opts ...Requ
 		if m == "" {
 			continue
 		}
+		if len(m) < 3 {
+			rd.Result.AddRawMsg("%s", m)
+			continue
+		}
 		msgType := m[0:3]
 		msg := m[3:]
-		if strings.HasPrefix(msg, ":") {
-			msg = msg[2:]
-		}
+		msg = strings.TrimPrefix(msg, ":")
+		msg = strings.TrimSpace(msg)
 		if strings.HasPrefix(msg, "[") {
 			if endBr := strings.Index(msg, "]"); endBr != -1 {
 				rd.Prefix = msg[1:endBr]
-				msg = msg[endBr+3:]
+				msg = strings.TrimSpace(msg[endBr+1:])
 			}
 		}
 		switch msgType {
@@ -511,100 +548,6 @@ func ParsePath(urlPath string, normalizePathCase, inclSlashPfx bool) ([]string, 
 	return paths, id
 }
 
-// ParseJwt validates, parses JWT and returns information using HMAC256 algorithm
-func ParseJwt(token, secretKey string, validateTimes bool) (*JWTInfo, error) {
-	sk := secretKey
-	skl := len(sk)
-	if skl == 0 {
-		return nil, ErrSecretKeyNotSet
-	}
-	var (
-		pl  CustomPayload
-		err error
-	)
-
-	if skl < 32 {
-		sk += strings.Repeat("1", 32-skl)
-	}
-
-	// Parse JWT
-	HMAC := jwt.NewHS256([]byte(sk))
-
-	// Validate claims "iat", "exp" and "aud".
-	if validateTimes {
-		now := time.Now()
-		// Use jwt.ValidatePayload to build a jwt.VerifyOption.
-		// Validators are run in the order informed.
-		validator := jwt.ValidatePayload(
-			&pl.Payload,
-			jwt.IssuedAtValidator(now),
-			jwt.ExpirationTimeValidator(now),
-			jwt.NotBeforeValidator(now))
-		_, err = jwt.Verify([]byte(token), HMAC, &pl, validator)
-	} else {
-		_, err = jwt.Verify([]byte(token), HMAC, &pl)
-	}
-	if err != nil {
-		return nil, err
-	}
-	return &JWTInfo{
-		Audience:      pl.Audience,
-		UserName:      pl.UserName,
-		Domain:        pl.Domain,
-		DeviceID:      pl.DeviceID,
-		ApplicationID: pl.ApplicationID,
-		TenantID:      pl.TenantID,
-		Raw:           token,
-		Valid:         true,
-	}, nil
-}
-
-// ParseJwtPayload validates, parses JWT and returns CustomPayload information using HMAC256 algorithm
-func ParseJwtPayload(token, secretKey string, validateTimes bool) (*CustomPayload, error) {
-	sk := secretKey
-	skl := len(sk)
-	if skl == 0 {
-		return nil, ErrSecretKeyNotSet
-	}
-	if skl < 32 {
-		sk += strings.Repeat("1", 32-skl)
-	}
-
-	// Parse JWT
-	HMAC := jwt.NewHS256([]byte(sk))
-
-	var (
-		pl  CustomPayload
-		err error
-	)
-
-	// Validate claims "iat", "exp" and "aud".
-	if validateTimes {
-		now := time.Now()
-		// Use jwt.ValidatePayload to build a jwt.VerifyOption.
-		// Validators are run in the order informed.
-		validator := jwt.ValidatePayload(
-			&pl.Payload,
-			jwt.IssuedAtValidator(now),
-			jwt.ExpirationTimeValidator(now),
-			jwt.NotBeforeValidator(now))
-		_, err = jwt.Verify([]byte(token), HMAC, &pl, validator)
-	} else {
-		_, err = jwt.Verify([]byte(token), HMAC, &pl)
-	}
-	if err != nil {
-		return nil, err
-	}
-	return &CustomPayload{
-		Payload:       pl.Payload,
-		UserName:      pl.UserName,
-		Domain:        pl.Domain,
-		ApplicationID: pl.ApplicationID,
-		DeviceID:      pl.DeviceID,
-		TenantID:      pl.TenantID,
-	}, nil
-}
-
 // ParseRouteVars parses custom routes from a route handler
 func ParseRouteVars(r *http.Request, preserveCmdCase bool) ([]string, string) {
 	up := r.URL.Path
@@ -627,6 +570,8 @@ func ParseRouteVars(r *http.Request, preserveCmdCase bool) ([]string, string) {
 }
 
 // SetLog sets a log function to ExecuteAPI calls
+// Should be called during application initialization before
+// concurrent requests are issued.
 func SetLog(f func(string, ...any)) {
 	if f == nil {
 		f = func(string, ...any) {}
@@ -639,211 +584,11 @@ func SetRequestTimeout(timeOut int) {
 	rto = timeOut
 }
 
-// SignJwt builds a JWT token using HMAC256 algorithm
-func SignJwt(claims *map[string]any, secretKey string) string {
-	pl := BuildJwtPayload(claims)
-	if pl == nil {
-		return ""
-	}
-	sk := secretKey
-	skl := len(sk)
-	if skl == 0 {
-		return ""
-	}
-	if skl < 32 {
-		sk += strings.Repeat("1", 32-skl)
-	}
-	token, err := jwt.Sign(*pl, jwt.NewHS256([]byte(sk)))
-	if err != nil {
-		return ""
-	}
-	return string(token)
-}
-
-// SignJwtWithPayload builds a JWT token with custom payload using HMAC256 algorithm
-func SignJwtWithPayload(pl *CustomPayload, secretKey string) string {
-	if pl == nil {
-		return ""
-	}
-	sk := secretKey
-	skl := len(sk)
-	if skl == 0 {
-		return ""
-	}
-	if skl < 32 {
-		sk += strings.Repeat("1", 32-skl)
-	}
-	token, err := jwt.Sign(*pl, jwt.NewHS256([]byte(sk)))
-	if err != nil {
-		return ""
-	}
-	return string(token)
-}
-
-// BuildJwtClaims builds JWT claim from CustomPayload
-func BuildJwtClaims(pl *CustomPayload) *map[string]any {
-	claims := make(map[string]any)
-	if pl.Issuer != "" {
-		claims["iss"] = pl.Issuer
-	}
-	if pl.Subject != "" {
-		claims["sub"] = pl.Subject
-	}
-	if len(pl.Audience) > 0 {
-		claims["aud"] = pl.Audience
-	}
-	if pl.ExpirationTime != nil {
-		claims["exp"] = pl.ExpirationTime.Unix()
-	}
-	if pl.NotBefore != nil {
-		claims["nbf"] = pl.NotBefore.Unix()
-	}
-	if pl.IssuedAt != nil {
-		claims["iat"] = pl.IssuedAt.Unix()
-	}
-	if pl.UserName != "" {
-		claims["usr"] = pl.UserName
-	}
-	if pl.Domain != "" {
-		claims["dom"] = pl.Domain
-	}
-	if pl.ApplicationID != "" {
-		claims["app"] = pl.ApplicationID
-	}
-	if pl.DeviceID != "" {
-		claims["dev"] = pl.DeviceID
-	}
-	if pl.JWTID != "" {
-		claims["jti"] = pl.JWTID
-	}
-	if pl.TenantID != "" {
-		claims["tnt"] = pl.TenantID
-	}
-	return &claims
-}
-
-// BuildJwtPayload builds custom payload from claims
-func BuildJwtPayload(claims *map[string]any) *CustomPayload {
-	if claims == nil {
-		return nil
-	}
-	clm := *claims
-
-	var (
-		usr, dom, app, dev string
-		iss, sub, jti, tnt string
-		exp, nbf, iat      int64
-		aud                jwt.Audience
-	)
-
-	if v, ok := clm["iss"]; ok {
-		iss, _ = asString(v)
-	}
-	if v, ok := clm["sub"]; ok {
-		sub, _ = asString(v)
-	}
-	if v, ok := clm["aud"]; ok {
-		if sl, ok := asStringSlice(v); ok {
-			aud = jwt.Audience(sl)
-		}
-	}
-	if v, ok := clm["exp"]; ok {
-		exp, _ = asInt64(v)
-	}
-	if v, ok := clm["nbf"]; ok {
-		nbf, _ = asInt64(v)
-	}
-	if v, ok := clm["iat"]; ok {
-		iat, _ = asInt64(v)
-	}
-	if v, ok := clm["usr"]; ok {
-		usr, _ = asString(v)
-	}
-	if v, ok := clm["dom"]; ok {
-		dom, _ = asString(v)
-	}
-	if v, ok := clm["app"]; ok {
-		app, _ = asString(v)
-	}
-	if v, ok := clm["dev"]; ok {
-		dev, _ = asString(v)
-	}
-	if v, ok := clm["jti"]; ok {
-		jti, _ = asString(v)
-	}
-	if v, ok := clm["tnt"]; ok {
-		tnt, _ = asString(v)
-	}
-
-	unixt := func(unixts int64) *jwt.Time {
-		if unixts <= 0 {
-			return nil
-		}
-		return &jwt.Time{Time: time.Unix(unixts, 0).UTC()}
-	}
-
-	return &CustomPayload{
-		Payload: jwt.Payload{
-			Issuer:         iss,
-			Subject:        sub,
-			Audience:       aud,
-			ExpirationTime: unixt(exp),
-			NotBefore:      unixt(nbf),
-			IssuedAt:       unixt(iat),
-			JWTID:          jti,
-		},
-		UserName:      usr,
-		Domain:        dom,
-		ApplicationID: app,
-		DeviceID:      dev,
-		TenantID:      tnt,
-	}
-}
-
-// ValidateJwt validates JWT and returns information using HMAC256 algorithm
-func ValidateJwt(r *http.Request, secretKey string, validateTimes bool) (*JWTInfo, error) {
-	var (
-		jwtfromck,
-		jwth string
-		jwtp []string
-	)
-	// Get Authorization header
-	if jwth = r.Header.Get("Authorization"); len(jwth) == 0 {
-		return nil, ErrAuthorizationHeaderNotSet
-	}
-	if jwtp = strings.Split(jwth, " "); len(jwtp) < 2 {
-		return nil, ErrInvalidAuthorizationHeader
-	}
-	if !strings.EqualFold(strings.TrimSpace(jwtp[0]), "bearer") {
-		return nil, ErrInvalidAuthorizationBearer
-	}
-	if jwtfromck = strings.TrimSpace(jwtp[1]); len(jwtfromck) == 0 {
-		return nil, ErrInvalidAuthorizationToken
-	}
-	return ParseJwt(jwtfromck, secretKey, validateTimes)
-}
-
-// ValidateJwtPayload validates JWT and returns custom payload information using HMAC256 algorithm
-func ValidateJwtPayload(r *http.Request, secretKey string, validateTimes bool) (*CustomPayload, error) {
-	var (
-		jwtfromck,
-		jwth string
-		jwtp []string
-	)
-	// Get Authorization header
-	if jwth = r.Header.Get("Authorization"); len(jwth) == 0 {
-		return nil, ErrAuthorizationHeaderNotSet
-	}
-	if jwtp = strings.Split(jwth, " "); len(jwtp) < 2 {
-		return nil, ErrInvalidAuthorizationHeader
-	}
-	if !strings.EqualFold(strings.TrimSpace(jwtp[0]), "bearer") {
-		return nil, ErrInvalidAuthorizationBearer
-	}
-	if jwtfromck = strings.TrimSpace(jwtp[1]); len(jwtfromck) == 0 {
-		return nil, ErrInvalidAuthorizationToken
-	}
-	return ParseJwtPayload(jwtfromck, secretKey, validateTimes)
+// SetResponseStore configures the shared response cache.
+// Should be called during application initialization before
+// concurrent requests are issued.
+func SetResponseStore(store ResponseStorage) {
+	rs = store
 }
 
 func getBody(r *http.Request, isMultiPart *bool) []byte {
@@ -860,14 +605,18 @@ func getBody(r *http.Request, isMultiPart *bool) []byte {
 		isMultiPart = new(bool)
 	}
 	*isMultiPart = c1 == mulpart
-	useBody := (c1 != furlenc && !*isMultiPart) && (method == "POST" || method == "PUT" || method == "DELETE")
+	useBody := (c1 != furlenc && !*isMultiPart) && (method == http.MethodPost || method == http.MethodPut || method == http.MethodDelete || method == http.MethodPatch)
 	if !useBody || r.Body == nil {
 		return nil
 	}
 
 	// single read, no closure, no extra empty slice
-	body, _ := io.ReadAll(r.Body)
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		return nil
+	}
 	r.Body.Close()
+	r.Body = io.NopCloser(bytes.NewReader(body))
 	return body
 }
 
@@ -977,15 +726,78 @@ func asStringSlice(v any) ([]string, bool) {
 	}
 }
 
-// func safeMapWrite[T any](ptrMap *map[string]T, key string, value T, rw *sync.RWMutex) bool {
-// 	defer func() {
-// 		recover()
-// 	}()
-// 	// Prepare mutex
-// 	// attempt writing to map
-// 	if rw.TryLock() {
-// 		defer rw.Unlock()
-// 		(*ptrMap)[key] = value
-// 	}
-// 	return true
-// }
+func readUncompressed(resp *http.Response) ([]byte, error) {
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		if !(errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, io.EOF)) {
+			return nil, fmt.Errorf("read failed: %w", err)
+		}
+	}
+	return body, nil
+}
+
+func readGzip(resp *http.Response) ([]byte, error) {
+	gzr, err := gzip.NewReader(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read failed: %w", err)
+	}
+	defer gzr.Close()
+
+	body, err := io.ReadAll(gzr) // single growing buffer
+	if err != nil && err != io.ErrUnexpectedEOF && err != io.EOF {
+		return nil, fmt.Errorf("read failed: %w", err)
+	}
+	return body, nil
+}
+
+func readBrotli(resp *http.Response) ([]byte, error) {
+	gzr := br.NewReader(resp.Body)
+	body, err := io.ReadAll(gzr)
+	if err != nil && err != io.ErrUnexpectedEOF && err != io.EOF {
+		return nil, fmt.Errorf("read failed: %w", err)
+	}
+	return body, nil
+}
+
+func readDeflate(resp *http.Response) ([]byte, error) {
+	dfr, err := zlib.NewReader(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read failed: %w", err)
+	}
+	defer dfr.Close()
+	body, err := io.ReadAll(dfr)
+	if err != nil && err != io.ErrUnexpectedEOF && err != io.EOF {
+		return nil, fmt.Errorf("read failed: %w", err)
+	}
+	return body, nil
+}
+
+func compressGzip(src []byte) ([]byte, error) {
+	var buf bytes.Buffer
+	gw, err := gzip.NewWriterLevel(&buf, gzip.BestSpeed)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := gw.Write(src); err != nil {
+		gw.Close()
+		return nil, err
+	}
+	if err := gw.Close(); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+func determineContentType(resp *http.Response, req *http.Request, rp *RequestParam) string {
+	ct := resp.Header.Get("Content-Type")
+	if ct == "" {
+		ct = rp.AssumedContentType
+	}
+	if ct == "" {
+		ct = req.Header.Get("Content-Type")
+	}
+	if i := strings.IndexByte(ct, ';'); i >= 0 {
+		ct = ct[:i]
+	}
+	return strings.ToLower(strings.TrimSpace(ct))
+}
