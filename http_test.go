@@ -36,6 +36,15 @@ func TestParsePath(t *testing.T) {
 }
 
 func TestSignJwt(t *testing.T) {
+	scrt := "2oVZvzSWzqNg6aogdTTUE2Kz0Mu"
+	vfyc := "1usT5wnxZiFAeS5RAPa7Suyk1EG"
+
+	vfyce, err := EncodeVerification(vfyc, scrt)
+	if err != nil {
+		t.Log(err)
+		t.Fail()
+	}
+
 	sign := SignJwt(&map[string]any{
 		"aud": "APPCORE-AUTH",
 		"exp": 0,
@@ -45,14 +54,21 @@ func TestSignJwt(t *testing.T) {
 		"dom": "MDCI",
 		"app": "APPCORE-AUTH",
 		"dev": "2v4R2BQowqz6ogkSwaWfp1kWTkL",
-	}, "2oVZvzSWzqNg6aogdTTUE2Kz0Mu")
+		"vfy": vfyce,
+	}, scrt)
 	t.Log(sign)
-	jwt, err := ParseJwt(sign, "2oVZvzSWzqNg6aogdTTUE2Kz0Mu", false)
+	jwt, err := ParseJwt(sign, scrt, false)
 	if err != nil {
 		t.Log(err)
 		t.Fail()
 	}
 	t.Log(jwt.Valid)
+	vfycd, err := DecodeVerification(vfyce, scrt)
+	if err != nil {
+		t.Log(err)
+		t.Fail()
+	}
+	t.Log(vfycd)
 }
 
 func TestParseJwt(t *testing.T) {

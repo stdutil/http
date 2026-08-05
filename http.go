@@ -51,11 +51,25 @@ type (
 	// CustomPayload - payload for JWT
 	CustomPayload struct {
 		jwt.Payload
-		UserName      string `json:"usr,omitempty"` // Username payload for JWT
-		Domain        string `json:"dom,omitempty"` // Domain payload for JWT
-		ApplicationID string `json:"app,omitempty"` // Application payload for JWT
-		DeviceID      string `json:"dev,omitempty"` // Device id payload for JWT
-		TenantID      string `json:"tnt,omitempty"` // Tenant id payload for JWT
+
+		// User name
+		UserName string `json:"usr,omitempty"`
+
+		// Domain
+		Domain string `json:"dom,omitempty"`
+
+		// Application id
+		ApplicationID string `json:"app,omitempty"`
+
+		// Device id
+		DeviceID string `json:"dev,omitempty"`
+
+		// Tenant id
+		TenantID string `json:"tnt,omitempty"`
+
+		// Verification value for application to API.
+		// This should be encoded and decoded using its own secret
+		Verification string `json:"vfy,omitempty"`
 	}
 	// ResultData - a result structure and a JSON raw message
 	ResultData struct {

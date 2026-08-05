@@ -1,6 +1,12 @@
 package http
 
 import (
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/rand"
+	"encoding/base64"
+	"errors"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -8,24 +14,34 @@ import (
 	"github.com/gbrlsnchs/jwt/v3"
 )
 
+type (
+	// JWTInfo contains the information about JWT
+	JWTInfo struct {
+		ApplicationID string   // Application ID from the JWT token
+		Audience      []string // Audience intended by the token
+		DeviceID      string   // The device id where the token came from
+		Domain        string   // The application domain that the token is intended for
+		Raw           string   // Raw JWT token
+		TenantID      string   // Tenant ID from the JWT token
+		UserName      string   // User account authenticated and produced the token
+		Verification  string   // Verification value for application to API. This is encrypted by its own secret
+		Valid         bool     // Indicates that the request has a valid JWT token
+	}
+)
+
 // ParseJwt validates, parses JWT and returns information using HMAC256 algorithm
 func ParseJwt(token, secretKey string, validateTimes bool) (*JWTInfo, error) {
-	sk := secretKey
-	skl := len(sk)
-	if skl == 0 {
-		return nil, ErrSecretKeyNotSet
-	}
-	var (
-		pl  CustomPayload
-		err error
-	)
-
-	if skl < 32 {
-		sk += strings.Repeat("1", 32-skl)
+	sk, err := sanitizeSecretKey(secretKey)
+	if err != nil {
+		return nil, err
 	}
 
 	// Parse JWT
 	HMAC := jwt.NewHS256([]byte(sk))
+
+	var (
+		pl CustomPayload
+	)
 
 	// Validate claims "iat", "exp" and "aud".
 	if validateTimes {
@@ -51,6 +67,7 @@ func ParseJwt(token, secretKey string, validateTimes bool) (*JWTInfo, error) {
 		DeviceID:      pl.DeviceID,
 		ApplicationID: pl.ApplicationID,
 		TenantID:      pl.TenantID,
+		Verification:  pl.Verification,
 		Raw:           token,
 		Valid:         true,
 	}, nil
@@ -58,21 +75,16 @@ func ParseJwt(token, secretKey string, validateTimes bool) (*JWTInfo, error) {
 
 // ParseJwtPayload validates, parses JWT and returns CustomPayload information using HMAC256 algorithm
 func ParseJwtPayload(token, secretKey string, validateTimes bool) (*CustomPayload, error) {
-	sk := secretKey
-	skl := len(sk)
-	if skl == 0 {
-		return nil, ErrSecretKeyNotSet
-	}
-	if skl < 32 {
-		sk += strings.Repeat("1", 32-skl)
+	sk, err := sanitizeSecretKey(secretKey)
+	if err != nil {
+		return nil, err
 	}
 
 	// Parse JWT
 	HMAC := jwt.NewHS256([]byte(sk))
 
 	var (
-		pl  CustomPayload
-		err error
+		pl CustomPayload
 	)
 
 	// Validate claims "iat", "exp" and "aud".
@@ -99,6 +111,7 @@ func ParseJwtPayload(token, secretKey string, validateTimes bool) (*CustomPayloa
 		ApplicationID: pl.ApplicationID,
 		DeviceID:      pl.DeviceID,
 		TenantID:      pl.TenantID,
+		Verification:  pl.Verification,
 	}, nil
 }
 
@@ -108,14 +121,11 @@ func SignJwt(claims *map[string]any, secretKey string) string {
 	if pl == nil {
 		return ""
 	}
-	sk := secretKey
-	skl := len(sk)
-	if skl == 0 {
+	sk, err := sanitizeSecretKey(secretKey)
+	if err != nil {
 		return ""
 	}
-	if skl < 32 {
-		sk += strings.Repeat("1", 32-skl)
-	}
+
 	token, err := jwt.Sign(*pl, jwt.NewHS256([]byte(sk)))
 	if err != nil {
 		return ""
@@ -128,14 +138,11 @@ func SignJwtWithPayload(pl *CustomPayload, secretKey string) string {
 	if pl == nil {
 		return ""
 	}
-	sk := secretKey
-	skl := len(sk)
-	if skl == 0 {
+	sk, err := sanitizeSecretKey(secretKey)
+	if err != nil {
 		return ""
 	}
-	if skl < 32 {
-		sk += strings.Repeat("1", 32-skl)
-	}
+
 	token, err := jwt.Sign(*pl, jwt.NewHS256([]byte(sk)))
 	if err != nil {
 		return ""
@@ -182,6 +189,9 @@ func BuildJwtClaims(pl *CustomPayload) *map[string]any {
 	if pl.TenantID != "" {
 		claims["tnt"] = pl.TenantID
 	}
+	if pl.Verification != "" {
+		claims["vfy"] = pl.Verification
+	}
 	return &claims
 }
 
@@ -193,10 +203,10 @@ func BuildJwtPayload(claims *map[string]any) *CustomPayload {
 	clm := *claims
 
 	var (
-		usr, dom, app, dev string
-		iss, sub, jti, tnt string
-		exp, nbf, iat      int64
-		aud                jwt.Audience
+		usr, dom, app, dev      string
+		iss, sub, jti, tnt, vfy string
+		exp, nbf, iat           int64
+		aud                     jwt.Audience
 	)
 
 	if v, ok := clm["iss"]; ok {
@@ -237,6 +247,9 @@ func BuildJwtPayload(claims *map[string]any) *CustomPayload {
 	if v, ok := clm["tnt"]; ok {
 		tnt, _ = asString(v)
 	}
+	if v, ok := clm["vfy"]; ok {
+		vfy, _ = asString(v)
+	}
 
 	unixt := func(unixts int64) *jwt.Time {
 		if unixts <= 0 {
@@ -260,6 +273,7 @@ func BuildJwtPayload(claims *map[string]any) *CustomPayload {
 		ApplicationID: app,
 		DeviceID:      dev,
 		TenantID:      tnt,
+		Verification:  vfy,
 	}
 }
 
@@ -307,4 +321,87 @@ func ValidateJwtPayload(r *http.Request, secretKey string, validateTimes bool) (
 		return nil, ErrInvalidAuthorizationToken
 	}
 	return ParseJwtPayload(jwtfromck, secretKey, validateTimes)
+}
+
+// EncodeVerification encrypts and encodes the plain verification code using the secret key.
+func EncodeVerification(plainVfy string, secretKey string) (string, error) {
+	sk, err := sanitizeSecretKey(secretKey)
+	if err != nil {
+		return "", err
+	}
+	vfb, err := encrypt([]byte(plainVfy), []byte(sk))
+	if err != nil {
+		return "", err
+	}
+	vfbs := base64.RawStdEncoding.EncodeToString(vfb)
+	return vfbs, nil
+}
+
+// DecodeVerification decryptes and decodes the encoded verification code using the secret key
+func DecodeVerification(encVfy string, secretKey string) (string, error) {
+	sk, err := sanitizeSecretKey(secretKey)
+	if err != nil {
+		return "", err
+	}
+	vfb, err := base64.RawStdEncoding.DecodeString(encVfy)
+	if err != nil {
+		return "", err
+	}
+
+	vfbs, err := decrypt(vfb, []byte(sk))
+	if err != nil {
+		return "", err
+	}
+
+	return string(vfbs), nil
+}
+
+func sanitizeSecretKey(sk string) (string, error) {
+	skl := len(sk)
+	if skl == 0 {
+		return "", ErrSecretKeyNotSet
+	}
+	if skl < 32 {
+		sk += strings.Repeat("1", 32-skl)
+	}
+	return sk, nil
+}
+
+func encrypt(plainText []byte, key []byte) ([]byte, error) {
+	c, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, err
+	}
+
+	gcm, err := cipher.NewGCM(c)
+	if err != nil {
+		return nil, err
+	}
+
+	nonce := make([]byte, gcm.NonceSize())
+	if _, err = io.ReadFull(rand.Reader, nonce); err != nil {
+		return nil, err
+	}
+
+	return gcm.Seal(nonce, nonce, plainText, nil), nil
+}
+
+func decrypt(cipherText []byte, key []byte) ([]byte, error) {
+	c, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, err
+	}
+
+	gcm, err := cipher.NewGCM(c)
+	if err != nil {
+		return nil, err
+	}
+
+	nonceSize := gcm.NonceSize()
+	if len(cipherText) < nonceSize {
+		return nil, errors.New("ciphertext too short")
+	}
+
+	nonce, payload := cipherText[:nonceSize], cipherText[nonceSize:]
+	return gcm.Open(nil, nonce, payload, nil)
 }
