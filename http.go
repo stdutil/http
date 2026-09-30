@@ -354,14 +354,18 @@ func ExecuteJsonApi(method string, endPoint string, payload []byte, opts ...Requ
 			rd.Result.AddRawMsg("%s", m)
 			continue
 		}
+		// Get message type
 		msgType := m[0:3]
+
+		// Get the rest after message type
 		msg := m[3:]
 		msg = strings.TrimPrefix(msg, ":")
 		msg = strings.TrimSpace(msg)
 		if strings.HasPrefix(msg, "[") {
 			if endBr := strings.Index(msg, "]"); endBr != -1 {
 				rd.Prefix = msg[1:endBr]
-				msg = strings.TrimSpace(msg[endBr+1:])
+				msg = strings.TrimPrefix(msg[endBr+1:], ":")
+				msg = strings.TrimSpace(msg)
 			}
 		}
 		switch msgType {
