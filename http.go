@@ -45,6 +45,7 @@ var (
 	ErrInvalidAuthorizationToken  = errors.New("http error: invalid authorization token")
 	ErrSecretKeyNotSet            = errors.New("http error: secret key not set")
 	ErrStatusCodeNotModified      = errors.New("http error: status code not modified")
+	ErrSecretInvalid              = errors.New("http error: secret is neither a valid base-encoded 32-byte key nor a 32-character plain string")
 )
 
 type (

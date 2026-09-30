@@ -357,6 +357,7 @@ func DecodeVerification(encVfy string, secretKey string) (string, error) {
 }
 
 func sanitizeSecretKey(sk string) (string, error) {
+	sk = strings.TrimSpace(sk)
 	skl := len(sk)
 	if skl == 0 {
 		return "", ErrSecretKeyNotSet
@@ -364,7 +365,27 @@ func sanitizeSecretKey(sk string) (string, error) {
 	if skl < 32 {
 		sk += strings.Repeat("1", 32-skl)
 	}
-	return sk, nil
+	if skl == 32 {
+		return sk, nil
+	}
+	decoders :=
+		[]*base64.Encoding{
+			base64.RawURLEncoding, // Most common for 43-char JWT secrets
+			base64.URLEncoding,    // URL-safe with padding
+			base64.RawStdEncoding, // Standard without padding
+			base64.StdEncoding,    // Standard with padding
+		}
+
+	for _, decoder := range decoders {
+		if decoded, err := decoder.DecodeString(sk); err == nil {
+			// A valid base-encoded secret MUST yield exactly 32 bytes (256 bits)
+			if len(decoded) == 32 {
+				return string(decoded), nil
+			}
+		}
+	}
+
+	return sk, ErrSecretInvalid
 }
 
 func encrypt(plainText []byte, key []byte) ([]byte, error) {
