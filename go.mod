@@ -8,7 +8,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/stdutil/log v0.1.6
 	github.com/stdutil/name-value v0.1.0
-	github.com/stdutil/result v0.1.6
+	github.com/stdutil/result v0.1.7
 )
 
 require (
