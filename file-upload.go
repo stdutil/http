@@ -145,6 +145,10 @@ func CreateUploadFromRequest(r *http.Request, srcFormName, dstFormName string) (
 
 	writer := multipart.NewWriter(payload)
 
+	if dstFormName == "" {
+		dstFormName = srcFormName
+	}
+
 	ioW, err := writer.CreateFormFile(dstFormName, filepath.Base(hdr.Filename))
 	if err != nil {
 		return payload, contentType, err
