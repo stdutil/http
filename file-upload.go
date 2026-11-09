@@ -82,28 +82,70 @@ func StoreUpload(r *http.Request, formName string) (TempFileName, UploadFileName
 
 // CreateUpload creates an uploadable data for http upload
 //
+// The function accepts the following parameters:
+//   - fileName: the file name of the file to upload
+//   - formName: the upload field name for the new upload request
+//
 // The function returns the following:
 //   - *bytes.Buffer: The buffer data. To get bytes, it call the Bytes() function
 //   - string: content type of the file
 //   - error
 func CreateUpload(fileName, formName string) (*bytes.Buffer, string, error) {
-	var (
-		err         error
-		payload     *bytes.Buffer
-		file        *os.File
-		ioW         io.Writer
-		contentType string
-	)
+	var contentType string
 
-	payload = &bytes.Buffer{}
+	payload := new(bytes.Buffer)
 	writer := multipart.NewWriter(payload)
-	file, err = os.Open(fileName)
+	file, err := os.Open(fileName)
 	if err != nil {
 		return payload, contentType, err
 	}
 	defer file.Close()
 
-	ioW, err = writer.CreateFormFile(formName, filepath.Base(fileName))
+	ioW, err := writer.CreateFormFile(formName, filepath.Base(fileName))
+	if err != nil {
+		return payload, contentType, err
+	}
+	_, err = io.Copy(ioW, file)
+	if err != nil {
+		return payload, contentType, err
+	}
+	err = writer.Close()
+	if err != nil {
+		return payload, contentType, err
+	}
+	contentType = writer.FormDataContentType()
+	return payload, contentType, err
+}
+
+// CreateUploadFromRequest creates an uploadable data for http upload from an earlier upload.
+//
+// # This can be used to transfer uploaded file from the web to a file upload API that needs secure internal transfer
+//
+// The function accepts the following parameters:
+//   - r: the request object from the web upload or form
+//   - srcFormName: the upload field name from the original request
+//   - dstFormName: the new upload field name for the new upload request
+//
+// The function returns the following:
+//   - *bytes.Buffer: The buffer data. To get bytes, it call the Bytes() function
+//   - string: content type of the file
+//   - error
+func CreateUploadFromRequest(r *http.Request, srcFormName, dstFormName string) (*bytes.Buffer, string, error) {
+	var contentType string
+	payload := new(bytes.Buffer)
+	if srcFormName == "" {
+		return payload, contentType, fmt.Errorf("source form name is not set")
+	}
+
+	file, hdr, err := r.FormFile(srcFormName)
+	if err != nil {
+		return payload, contentType, err
+	}
+	defer file.Close()
+
+	writer := multipart.NewWriter(payload)
+
+	ioW, err := writer.CreateFormFile(dstFormName, filepath.Base(hdr.Filename))
 	if err != nil {
 		return payload, contentType, err
 	}
