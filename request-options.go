@@ -91,3 +91,9 @@ func ReturnBodyOn304(returnBody bool) RequestOption {
 		return nil
 	}
 }
+
+func RawPayload(raw bool) RequestOption {
+	return func(rp *RequestParam) error {
+		return nil
+	}
+}
