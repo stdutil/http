@@ -54,6 +54,9 @@ func Headers(hdr map[string]string) RequestOption {
 // This is used with <REST verb>Api functions
 func Header(k, v string) RequestOption {
 	return func(rp *RequestParam) error {
+		if rp.Headers == nil {
+			rp.Headers = make(map[string]string)
+		}
 		rp.Headers[k] = v
 		return nil
 	}
