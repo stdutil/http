@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"compress/zlib"
+	"context"
 	"encoding/json"
 	"encoding/xml"
 	"errors"
@@ -104,6 +105,7 @@ func ExecuteApi[T any](method, endpoint string, payload []byte, opts ...RequestO
 		LogFunc:            nil,
 		AssumedContentType: "application/json",
 		ReturnBodyOn304:    false,
+		Context:            nil,
 	}
 	for _, o := range opts {
 		if o != nil {
@@ -132,8 +134,13 @@ func ExecuteApi[T any](method, endpoint string, payload []byte, opts ...RequestO
 		}
 	}
 
+	ctx := rp.Context
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
 	// Create request
-	req, err := http.NewRequest(method, endpoint, bytes.NewReader(pl))
+	req, err := http.NewRequestWithContext(ctx, method, endpoint, bytes.NewReader(pl))
 	if err != nil {
 		lf("%v: %s %s - %s", log.Error, method, endpoint, err)
 		return x, err

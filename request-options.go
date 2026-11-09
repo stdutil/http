@@ -1,6 +1,9 @@
 package http
 
-import "maps"
+import (
+	"context"
+	"maps"
+)
 
 type (
 	// RequestParam for <REST verb>Api request functions
@@ -11,6 +14,7 @@ type (
 		LogFunc            func(string, ...any) // Log function
 		AssumedContentType string               // Assumed response body content type
 		ReturnBodyOn304    bool                 // Return response on 304 Not Modified
+		Context            context.Context      // Insert a context to the request
 	}
 	// RequestOption for <REST verb>Api request functions
 	RequestOption func(opt *RequestParam) error
@@ -92,8 +96,12 @@ func ReturnBodyOn304(returnBody bool) RequestOption {
 	}
 }
 
-func RawPayload(raw bool) RequestOption {
+// Context sets the context to the request
+//
+// This is used with <REST verb>Api functions
+func Context(ctx context.Context) RequestOption {
 	return func(rp *RequestParam) error {
+		rp.Context = ctx
 		return nil
 	}
 }
